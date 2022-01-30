@@ -19,7 +19,10 @@ httpserver:
   read_timeout: 0
   write_timeout: 0
 
-
+redis:
+  host: "172.25.1.50"
+  port: "6379"
+  db: 0
 
 graphs:
   micro:

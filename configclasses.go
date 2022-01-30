@@ -14,5 +14,12 @@
 package main
 
 type AllConfig struct {
-	AllGraphs map[string]map[string][]interface{}
+	AllGraphs       map[string]map[string][]interface{}
+	RedisConnection RedisConnection
+}
+
+type RedisConnection struct {
+	Host string `mapstructure:"host"`
+	Port string `mapstructure:"port"`
+	DB   string `mapstructure:"db"`
 }

@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -133,12 +134,22 @@ func main() {
 	err = viper.UnmarshalKey("graphs", &graphs)
 	if err != nil {
 
-		log.Error("Unable to decode node fields into struct - ", err)
+		log.Error("Unable to decode node and edge fields into struct - ", err)
+		os.Exit(1)
+	}
+
+	//var nodeFields = NodeFields{}
+	var redisConnection = RedisConnection{}
+	err = viper.UnmarshalKey("redis", &redisConnection)
+	if err != nil {
+
+		log.Error("Unable to decode redis connection struct - ", err)
 		os.Exit(1)
 	}
 
 	allConfig := AllConfig{
-		AllGraphs: graphs,
+		AllGraphs:       graphs,
+		RedisConnection: redisConnection,
 	}
 
 	handler := &HandlerInit{allConfig}
@@ -252,7 +263,7 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	// Get the name of the graph model
 	name := params["graph"]
 
-	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
+	conn := h.getRedisConnection()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
@@ -346,7 +357,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
+	conn := h.getRedisConnection()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
@@ -403,7 +414,20 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// PUT
+	// Check if the node exists
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+		id := params["id"]
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", id)
+		result, _ := graph.Query(query)
+
+		if result.Empty() {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(fmt.Sprintf("Node id %s does not exists\n", id)))
+			return
+		}
+	}
+
+	// PUT node
 	if r.Method == http.MethodPut {
 		id := params["id"]
 		values := r.URL.Query()
@@ -424,6 +448,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete node
 	if r.Method == http.MethodDelete {
 		id := params["id"]
 
@@ -457,7 +482,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
+	conn := h.getRedisConnection()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
@@ -470,14 +495,32 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			panic(err)
 		}
-		log.Println(t)
+
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
 			t["source_id"], t["target_id"])
 		result, _ := graph.Query(query)
 		result.PrettyPrint()
 		if result.Empty() {
-			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r",
-				t["source_id"], t["target_id"])
+			/*
+				p := make([]string, 0, len(n.Properties))
+					for k, v := range n.Properties {
+						p = append(p, fmt.Sprintf("%s:%v", k, ToString(v)))
+					}
+
+					s := fmt.Sprintf("{%s}", strings.Join(p, ","))
+
+			*/
+			p := make([]string, 0, len(t)-2)
+			for k, v := range t {
+				if k != "source_id" && k != "target_id" {
+					p = append(p, fmt.Sprintf("%s:%v", k, ToString(v)))
+				}
+			}
+			s := fmt.Sprintf("{%s}", strings.Join(p, ","))
+
+			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge %s]->(b) RETURN r",
+				t["source_id"], t["target_id"], s)
+
 			result, _ := graph.Query(query)
 			result.PrettyPrint()
 			log.WithFields(log.Fields{
@@ -488,7 +531,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			}).Info("Create")
 
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s", t["source_id"], t["target_id"])))
+			w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s\n", t["source_id"], t["target_id"])))
 
 			return
 		} else {
@@ -504,7 +547,23 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// PUT
+	// Check if the edge exists
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+		sourceId := params["source_id"]
+		targetId := params["target_id"]
+
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
+			sourceId, targetId)
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		if result.Empty() {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(fmt.Sprintf("Edge between source id %s and target id %s does not exists\n", sourceId, targetId)))
+			return
+		}
+	}
+
+	// PUT edge
 	if r.Method == http.MethodPut {
 		sourceId := params["source_id"]
 		targetId := params["target_id"]
@@ -528,6 +587,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DELETE edge
 	if r.Method == http.MethodDelete {
 		sourceId := params["source_id"]
 		targetId := params["target_id"]
@@ -546,6 +606,45 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprintf("Delete edge between source id %s and target id %s\n", sourceId, targetId)))
 		return
 	}
+}
+
+func (h HandlerInit) getRedisConnection() redis.Conn {
+	conn, _ := redis.Dial("tcp", fmt.Sprintf("%s:%s", h.AllConfig.RedisConnection.Host, h.AllConfig.RedisConnection.Port))
+	return conn
+}
+
+// From the RedisGraph code base
+func ToString(i interface{}) string {
+	if i == nil {
+		return "null"
+	}
+
+	switch i.(type) {
+	case string:
+		s := i.(string)
+		return strconv.Quote(s)
+	case int:
+		return strconv.Itoa(i.(int))
+	case float64:
+		return strconv.FormatFloat(i.(float64), 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(i.(bool))
+	case []interface{}:
+		arr := i.([]interface{})
+		return arrayToString(arr)
+	default:
+		panic("Unrecognized type to convert to string")
+	}
+}
+
+// From the RedisGraph code base
+func arrayToString(arr []interface{}) string {
+	var arrayLength = len(arr)
+	strArray := []string{}
+	for i := 0; i < arrayLength; i++ {
+		strArray = append(strArray, ToString(arr[i]))
+	}
+	return "[" + strings.Join(strArray, ",") + "]"
 }
 
 func alive(w http.ResponseWriter, r *http.Request) {

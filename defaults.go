@@ -79,4 +79,10 @@ func SetDefaultValues() {
 	viper.SetDefault("httpserver.write_timeout", 0)
 	viper.BindEnv("httpserver.write_timeout")
 
+	viper.SetDefault("redis.host", "localhost")
+	viper.BindEnv("redis.host")
+	viper.SetDefault("redis.port", 6379)
+	viper.BindEnv("redis.port")
+	viper.SetDefault("redis.db", 0)
+	viper.BindEnv("redis.db")
 }
