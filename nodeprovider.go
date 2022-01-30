@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/golang/gddo/httputil/header"
 	"github.com/gomodule/redigo/redis"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
@@ -85,9 +86,9 @@ func main() {
 	viper.SetConfigType("yaml")  // REQUIRED if the config file does not have the extension in the name
 
 	viper.AddConfigPath(".")
-	viper.AddConfigPath("$HOME/.aci-exporter")
-	viper.AddConfigPath("/usr/local/etc/aci-exporter")
-	viper.AddConfigPath("/etc/aci-exporter")
+	viper.AddConfigPath("$HOME/.nodegraph-provider")
+	viper.AddConfigPath("/usr/local/etc/nodegraph-provider")
+	viper.AddConfigPath("/etc/nodegraph-provider")
 
 	if *usage {
 		flag.Usage()
@@ -117,41 +118,30 @@ func main() {
 		os.Exit(1)
 	}
 
-
 	/*
-	var nodes = Nodes{}
-	err = viper.UnmarshalKey("nodes", &nodes)
-	if err != nil {
+		var nodes = Nodes{}
+		err = viper.UnmarshalKey("nodes", &nodes)
+		if err != nil {
 
-		log.Error("Unable to decode nodes into struct - ", err)
-		os.Exit(1)
-	}
+			log.Error("Unable to decode nodes into struct - ", err)
+			os.Exit(1)
+		}
 	*/
 
 	//var nodeFields = NodeFields{}
-	var nodeFields = []interface{}{}
-	err = viper.UnmarshalKey("node_fields", &nodeFields)
+	var graphs = map[string]map[string][]interface{}{}
+	err = viper.UnmarshalKey("graphs", &graphs)
 	if err != nil {
 
 		log.Error("Unable to decode node fields into struct - ", err)
 		os.Exit(1)
 	}
 
-	//var nodeFields = NodeFields{}
-	var edgeFields = []interface{}{}
-	err = viper.UnmarshalKey("edge_fields", &edgeFields)
-	if err != nil {
-
-		log.Error("Unable to decode node fields into struct - ", err)
-		os.Exit(1)
-	}
 	allConfig := AllConfig{
-		AllEdgeFields: edgeFields,
-		AllNodeFields: nodeFields,
+		AllGraphs: graphs,
 	}
 
 	handler := &HandlerInit{allConfig}
-	//	handler := &HandlerInit{allQueries}
 
 	// Create a Prometheus histogram for response time of the exporter
 	responseTime := promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -164,7 +154,7 @@ func main() {
 
 	promHandler := &PromethusInit{responseTime}
 
-	// Setup handler for aci destinations
+	// Setup handler for routes
 	setupRoutes(handler, promHandler)
 
 	log.Info(fmt.Sprintf("%s starting on port %d", ExporterName, viper.GetInt("port")))
@@ -180,24 +170,26 @@ func main() {
 func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 
 	rtr := mux.NewRouter()
-	//rtr.HandleFunc("/{graph:.+}/api/graph/data", handler.getData).Methods("GET")
+
+	// Route handlers for Node Graph API Datasource Plugin
+	// the graph path must be part of the data source url like http://localhost:9393/micro
+	// where micro is the redis key to the graph model
 	rtr.HandleFunc("/{graph:.+}/api/graph/data", handler.getData).Methods("GET")
 	rtr.HandleFunc("/{graph:.+}/api/graph/fields", handler.getFields).Methods("GET")
 	rtr.HandleFunc("/{graph:.+}/api/health", handler.getData).Methods("GET")
+
+	// Routes to the create and update of nodes and edges
+	// Node
+	rtr.HandleFunc("/api/nodes/{graph:.+}", handler.nodes).Methods("POST")
+	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("PUT")
+	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("DELETE")
+	// Edge
+	rtr.HandleFunc("/api/edges/{graph:.+}", handler.edges).Methods("POST")
+	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("PUT")
+	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("DELETE")
 	rtr.Use(logcall)
 	rtr.Use(promHandler.promMonitor)
 	http.Handle("/", rtr)
-
-	/*
-	http.Handle("/Xapi/graph/data", logcall(promMonitor(http.HandlerFunc(handler.getData), responseTime,
-		"/api/graph/data")))
-	http.Handle("/Xapi/graph/fields", logcall(promMonitor(http.HandlerFunc(handler.getFields), responseTime,
-		"/api/graph/fields")))
-	http.Handle("/Xapi/health", logcall(promMonitor(http.HandlerFunc(handler.getHealth), responseTime,
-		"/api/health")))
-	http.Handle("/Xalive", logcall(promMonitor(http.HandlerFunc(alive), responseTime,
-		"/alive")))
-	*/
 
 	// Setup handler for exporter metrics
 	http.Handle("/metrics", promhttp.HandlerFor(
@@ -213,20 +205,15 @@ type HandlerInit struct {
 	AllConfig AllConfig
 }
 
-type PromethusInit struct {
-	responseTime *prometheus.HistogramVec
-}
-
 func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
-	fmt.Printf("%", r.URL)
+
 	params := mux.Vars(r)
 	name := params["graph"]
-	fmt.Printf("Graph: %", name)
 
-	nodeFields := []interface{}{}
+	var nodeFields []interface{}
 
-	for _, fields := range h.AllConfig.AllNodeFields {
+	for _, fields := range h.AllConfig.AllGraphs[name]["node_fields"] {
 		values := fields.(map[interface{}]interface{})
 		nodeField := map[string]interface{}{}
 		for k, v := range values {
@@ -236,8 +223,8 @@ func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 		nodeFields = append(nodeFields, nodeField)
 	}
 
-	edgeFields := []interface{}{}
-	for _, fields := range h.AllConfig.AllEdgeFields {
+	var edgeFields []interface{}
+	for _, fields := range h.AllConfig.AllGraphs[name]["edge_fields"] {
 		values := fields.(map[interface{}]interface{})
 		edgeField := map[string]interface{}{}
 		for k, v := range values {
@@ -261,11 +248,9 @@ func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 
-	fmt.Printf("%", r.URL)
 	params := mux.Vars(r)
+	// Get the name of the graph model
 	name := params["graph"]
-	fmt.Printf("Graph: %", name)
-
 
 	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
 	defer conn.Close()
@@ -318,13 +303,6 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 
 			node[key] = value
 		}
-/*
-		node["id"] = nodeData.Properties["id"]
-		node["title"] = nodeData.Properties["title"]
-		node["subTitle"] = nodeData.Properties["subTitle"]
-		node["mainStat"] = nodeData.Properties["mainStat"]
-		node["secondaryStat"] = nodeData.Properties["secondaryStat"]
-*/
 
 		nodes = append(nodes, node)
 	}
@@ -334,13 +312,11 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	response["nodes"] = nodes
 
 	bodyText, _ := json.Marshal(response)
-	//bodyText := "Get fields"
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(bodyText))
 
 	return
 }
-
 
 func (h HandlerInit) getHealth(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
@@ -355,6 +331,223 @@ func (h HandlerInit) getHealth(w http.ResponseWriter, r *http.Request) {
 
 	return
 }
+
+func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
+
+	params := mux.Vars(r)
+	// Get the name of the graph model
+	name := params["graph"]
+
+	if r.Header.Get("Content-Type") != "" {
+		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
+		if value != "application/json" {
+			msg := "Content-Type header is not application/json"
+			http.Error(w, msg, http.StatusUnsupportedMediaType)
+			return
+		}
+	}
+	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
+	defer conn.Close()
+
+	graph := rg.GraphNew(name, conn)
+
+	// POST
+	if r.Method == http.MethodPost {
+		decoder := json.NewDecoder(r.Body)
+		t := make(map[string]interface{})
+		err := decoder.Decode(&t)
+		if err != nil {
+			panic(err)
+		}
+		log.Println(t)
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", t["id"])
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		if result.Empty() {
+			node := rg.Node{Label: "Node", Properties: t}
+
+			graph.AddNode(&node)
+
+			_, err := graph.Commit()
+
+			if err != nil {
+				log.WithFields(log.Fields{
+					"object":    "node",
+					"requestid": r.Context().Value("requestid"),
+					"nodeid":    t["id"],
+					"error":     err,
+				}).Error("Failed to create node")
+				msg := fmt.Sprintf("Failed to create node %s", t["id"])
+				http.Error(w, msg, http.StatusInternalServerError)
+				return
+			}
+
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"nodeid":    t["id"],
+			}).Info("Create")
+
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(fmt.Sprintf("Create node id %s\n", t["id"])))
+			return
+		} else {
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"nodeid":    t["id"],
+			}).Info("Create - already exists")
+			msg := fmt.Sprintf("Node with id %s already exists", t["id"])
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
+	}
+
+	// PUT
+	if r.Method == http.MethodPut {
+		id := params["id"]
+		values := r.URL.Query()
+		for k, v := range values {
+			query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) SET n.%s = %s ", id, k, v[0])
+			result, _ := graph.Query(query)
+			result.PrettyPrint()
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"nodeid":    id,
+				"attribute": k,
+				"value":     v,
+			}).Info("Update")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Update node id %s\n", id)))
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		id := params["id"]
+
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) DELETE n", id)
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		log.WithFields(log.Fields{
+			"object":    "node",
+			"requestid": r.Context().Value("requestid"),
+			"nodeid":    id,
+		}).Info("Delete")
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Delete node id %s\n", id)))
+		return
+	}
+
+}
+
+func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
+
+	params := mux.Vars(r)
+	// Get the name of the graph model
+	name := params["graph"]
+
+	if r.Header.Get("Content-Type") != "" {
+		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
+		if value != "application/json" {
+			msg := "Content-Type header is not application/json"
+			http.Error(w, msg, http.StatusUnsupportedMediaType)
+			return
+		}
+	}
+	conn, _ := redis.Dial("tcp", "127.0.0.1:6379")
+	defer conn.Close()
+
+	graph := rg.GraphNew(name, conn)
+
+	// POST
+	if r.Method == http.MethodPost {
+		decoder := json.NewDecoder(r.Body)
+		t := make(map[string]interface{})
+		err := decoder.Decode(&t)
+		if err != nil {
+			panic(err)
+		}
+		log.Println(t)
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
+			t["source_id"], t["target_id"])
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		if result.Empty() {
+			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r",
+				t["source_id"], t["target_id"])
+			result, _ := graph.Query(query)
+			result.PrettyPrint()
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  t["source_id"],
+				"targetid":  t["target_id"],
+			}).Info("Create")
+
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s", t["source_id"], t["target_id"])))
+
+			return
+		} else {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  t["source_id"],
+				"targetid":  t["target_id"],
+			}).Info("Create - already exists")
+			msg := fmt.Sprintf("Edge between source id %s and target id %s already exists", t["source_id"], t["target_id"])
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
+	}
+
+	// PUT
+	if r.Method == http.MethodPut {
+		sourceId := params["source_id"]
+		targetId := params["target_id"]
+		values := r.URL.Query()
+		for k, v := range values {
+			query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' SET r.%s = %s",
+				sourceId, targetId, k, v[0])
+			result, _ := graph.Query(query)
+			result.PrettyPrint()
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  sourceId,
+				"targetid":  targetId,
+				"attribute": k,
+				"value":     v,
+			}).Info("Update")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Update edge between source id %s and target id %s\n", sourceId, targetId)))
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		sourceId := params["source_id"]
+		targetId := params["target_id"]
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' DELETE r",
+			sourceId, targetId)
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		log.WithFields(log.Fields{
+			"object":    "edge",
+			"requestid": r.Context().Value("requestid"),
+			"sourceid":  sourceId,
+			"targetid":  targetId,
+		}).Info("Delete")
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(fmt.Sprintf("Delete edge between source id %s and target id %s\n", sourceId, targetId)))
+		return
+	}
+}
+
 func alive(w http.ResponseWriter, r *http.Request) {
 
 	var alive = fmt.Sprintf("Alive!\n")
@@ -384,7 +577,6 @@ func logcall(next http.Handler) http.Handler {
 		log.WithFields(log.Fields{
 			"method":    r.Method,
 			"uri":       r.RequestURI,
-			"fabric":    r.URL.Query().Get("target"),
 			"status":    lrw.statusCode,
 			"length":    lrw.length,
 			"requestid": requestid,
@@ -392,6 +584,10 @@ func logcall(next http.Handler) http.Handler {
 		}).Info("api call")
 	})
 
+}
+
+type PromethusInit struct {
+	responseTime *prometheus.HistogramVec
 }
 
 func (h PromethusInit) promMonitor(next http.Handler) http.Handler {
@@ -404,8 +600,6 @@ func (h PromethusInit) promMonitor(next http.Handler) http.Handler {
 		next.ServeHTTP(&lrw, r) // call original
 
 		response := time.Since(start).Seconds()
-
-
 
 		h.responseTime.With(prometheus.Labels{"url": r.URL.Path, "method": r.Method, "status": strconv.Itoa(lrw.statusCode)}).Observe(response)
 	})

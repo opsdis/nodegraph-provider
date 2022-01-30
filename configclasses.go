@@ -12,39 +12,7 @@
 // Copyright 2020 Opsdis AB
 
 package main
+
 type AllConfig struct {
-	AllNodeFields	[]interface{}
-	AllEdgeFields	[]interface{}
-}
-type NodeFields []*NodeField
-
-
-type NodeField struct {
-	FieldName            string         `mapstructure:"field_name" json:"field_name"`
-}
-
-
-type Nodes []*Node
-
-type Node struct {
-	Id            string         `mapstructure:"id"`
-	Title         string         `mapstructure:"title"`
-	SubTitle      string         `mapstructure:"subTitle"`
-	MainStat      string         `mapstructure:"mainStat"`
-	SecondaryStat string         `mapstructure:"secondaryStat"`
-	Detail        []StaticLabels `string:"detail"`
-	Arc           []StaticLabels `string:"arc"`
-	Queries       []Query        `string:"queries"`
-}
-
-
-type StaticLabels struct {
-	Key   string `mapstructure:"key"`
-	Value string `mapstructure:"value"`
-}
-
-// Define a Query config
-type Query struct {
-	Id    string `mapstructure:"id"`
-	Query string `mapstructure:"query"`
+	AllGraphs map[string]map[string][]interface{}
 }

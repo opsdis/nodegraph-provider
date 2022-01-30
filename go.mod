@@ -3,6 +3,7 @@ module github.com/opsdis/nodegraph-provider
 go 1.14
 
 require (
+	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f
 	github.com/gomodule/redigo v1.8.8
 	github.com/gorilla/mux v1.8.0
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
