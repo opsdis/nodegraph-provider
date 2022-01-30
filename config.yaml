@@ -1,0 +1,54 @@
+# Exporter port
+port: 9393
+# Configuration file name default without postfix
+config: config
+# The prefix of the metrics
+prefix: nodegraph_provider
+
+
+# Http client settings used to access apic
+httpclient:
+  insecurehttps: true
+  # Default is 15 seconds
+  keepalive: 15
+  # Zero means no timeout
+  timeout: 0
+
+# Http server settings - this is for the web server aci-exporter expose
+httpserver:
+  read_timeout: 0
+  write_timeout: 0
+
+node_fields:
+  - field_name: "id"
+    type: "string"
+  - field_name: "title"
+    type: "string"
+  - field_name: "subTitle"
+    type: "string"
+  - field_name: "mainStat"
+    type: "string"
+    displayName: "CPU"
+  - field_name: "secondaryStat"
+    type: "number"
+  - field_name: "arc__failed"
+    type: "number"
+    color: "red"
+  - field_name: "arc__passed"
+    type: "number"
+    color: "green"
+  - field_name: "detail__role"
+    type: "string"
+    displayName: "Role"
+
+
+edge_fields:
+  - field_name: "id"
+    type: "string"
+  - field_name: "source"
+    type: "string"
+  - field_name: "target"
+    type: "string"
+  - field_name: "mainStat"
+    type: "number"
+
