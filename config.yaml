@@ -25,6 +25,7 @@ redis:
   db: 0
 
 graphs:
+  # The name of the schema and matching the key in redis for the graph
   micro:
     node_fields:
       - field_name: "id"
@@ -56,4 +57,36 @@ graphs:
         type: "string"
       - field_name: "mainStat"
         type: "number"
+  test:
+    node_fields:
+      - field_name: "id"
+        type: "string"
+      - field_name: "title"
+        type: "string"
+      - field_name: "subTitle"
+        type: "string"
+      - field_name: "mainStat"
+        type: "string"
+        displayName: "CPU"
+      - field_name: "secondaryStat"
+        type: "number"
+      - field_name: "arc__failed"
+        type: "number"
+        color: "red"
+      - field_name: "arc__passed"
+        type: "number"
+        color: "green"
+      - field_name: "detail__role"
+        type: "string"
+        displayName: "Role"
+    edge_fields:
+      - field_name: "id"
+        type: "string"
+      - field_name: "source"
+        type: "string"
+      - field_name: "target"
+        type: "string"
+      - field_name: "mainStat"
+        type: "string"
+
 
