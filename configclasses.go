@@ -15,6 +15,8 @@ package main
 
 type AllConfig struct {
 	AllGraphs       map[string]map[string][]interface{}
+	NodeFields      map[string]map[string]string
+	EdgeFields      map[string]map[string]string
 	RedisConnection RedisConnection
 }
 
@@ -22,4 +24,9 @@ type RedisConnection struct {
 	Host string `mapstructure:"host"`
 	Port string `mapstructure:"port"`
 	DB   string `mapstructure:"db"`
+}
+
+type Field struct {
+	FieldName string `mapstructure:"field_name"`
+	Type      string `mapstructure:"type"`
 }
