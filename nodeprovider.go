@@ -21,6 +21,7 @@ import (
 	"github.com/golang/gddo/httputil/header"
 	"github.com/gomodule/redigo/redis"
 	"github.com/gorilla/mux"
+	"github.com/mitchellh/mapstructure"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -129,16 +130,43 @@ func main() {
 		}
 	*/
 
-	//var nodeFields = NodeFields{}
+	// Read the graph schema
 	var graphs = map[string]map[string][]interface{}{}
 	err = viper.UnmarshalKey("graphs", &graphs)
 	if err != nil {
-
 		log.Error("Unable to decode node and edge fields into struct - ", err)
 		os.Exit(1)
 	}
 
-	//var nodeFields = NodeFields{}
+	// Get all fields as map used for validation
+	var nodeFields = make(map[string]map[string]string)
+	var edgeFields = make(map[string]map[string]string)
+	for graphName, graph := range graphs {
+		nodes := make(map[string]string)
+		for _, fieldInterface := range graph["node_fields"] {
+			field := Field{}
+			err = mapstructure.Decode(fieldInterface, &field)
+			if err != nil {
+				log.Error("Unable parse node fields into struct - ", err)
+				os.Exit(1)
+			}
+			nodes[field.FieldName] = field.Type
+		}
+		nodeFields[graphName] = nodes
+
+		edges := make(map[string]string)
+		for _, fieldInterface := range graph["edge_fields"] {
+			field := Field{}
+			err = mapstructure.Decode(fieldInterface, &field)
+			if err != nil {
+				log.Error("Unable parse node fields into struct - ", err)
+				os.Exit(1)
+			}
+			edges[field.FieldName] = field.Type
+		}
+		edgeFields[graphName] = edges
+	}
+	// Read the redis connection configuration
 	var redisConnection = RedisConnection{}
 	err = viper.UnmarshalKey("redis", &redisConnection)
 	if err != nil {
@@ -149,6 +177,8 @@ func main() {
 
 	allConfig := AllConfig{
 		AllGraphs:       graphs,
+		NodeFields:      nodeFields,
+		EdgeFields:      edgeFields,
 		RedisConnection: redisConnection,
 	}
 
@@ -187,7 +217,7 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 	// where micro is the redis key to the graph model
 	rtr.HandleFunc("/{graph:.+}/api/graph/data", handler.getData).Methods("GET")
 	rtr.HandleFunc("/{graph:.+}/api/graph/fields", handler.getFields).Methods("GET")
-	rtr.HandleFunc("/{graph:.+}/api/health", handler.getData).Methods("GET")
+	rtr.HandleFunc("/{graph:.+}/api/health", handler.getHealth).Methods("GET")
 
 	// Routes to the create and update of nodes and edges
 	// Node
@@ -251,7 +281,7 @@ func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 	bodyText, _ := json.Marshal(response)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(bodyText))
+	_, _ = w.Write(bodyText)
 
 	return
 }
@@ -304,7 +334,7 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 
 	// create a dynamic id for edges
 	//count = 0
-	nodes := []interface{}{}
+	var nodes []interface{}
 	for result.Next() {
 		node := make(map[string]interface{})
 		r := result.Record()
@@ -324,21 +354,19 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 
 	bodyText, _ := json.Marshal(response)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(bodyText))
+	_, _ = w.Write(bodyText)
 
 	return
 }
 
 func (h HandlerInit) getHealth(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
-	fmt.Printf("%", r.URL)
 	params := mux.Vars(r)
 	name := params["graph"]
-	fmt.Printf("Graph: %", name)
 
-	bodyText := "API is working well!"
+	bodyText := fmt.Sprintf("API is working well! Using graph %s\n", name)
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(bodyText))
+	_, _ = w.Write([]byte(bodyText))
 
 	return
 }
@@ -357,6 +385,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
 	conn := h.getRedisConnection()
 	defer conn.Close()
 
@@ -365,17 +394,33 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 	// POST
 	if r.Method == http.MethodPost {
 		decoder := json.NewDecoder(r.Body)
-		t := make(map[string]interface{})
-		err := decoder.Decode(&t)
+		properties := make(map[string]interface{})
+		err := decoder.Decode(&properties)
 		if err != nil {
-			panic(err)
+
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"error":     "Not a valid json",
+			}).Warn("Create failed")
+
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(fmt.Sprintf("Create node failed: %v\n", err)))
+			return
 		}
-		log.Println(t)
-		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", t["id"])
+		for k := range properties {
+			if _, ok := h.AllConfig.NodeFields[name][k]; !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(fmt.Sprintf("Create node failed %s is no a valid property\n", k)))
+				return
+			}
+		}
+
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", properties["id"])
 		result, _ := graph.Query(query)
 		result.PrettyPrint()
 		if result.Empty() {
-			node := rg.Node{Label: "Node", Properties: t}
+			node := rg.Node{Label: "Node", Properties: properties}
 
 			graph.AddNode(&node)
 
@@ -385,10 +430,10 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 				log.WithFields(log.Fields{
 					"object":    "node",
 					"requestid": r.Context().Value("requestid"),
-					"nodeid":    t["id"],
+					"nodeid":    properties["id"],
 					"error":     err,
 				}).Error("Failed to create node")
-				msg := fmt.Sprintf("Failed to create node %s", t["id"])
+				msg := fmt.Sprintf("Failed to create node %s", properties["id"])
 				http.Error(w, msg, http.StatusInternalServerError)
 				return
 			}
@@ -396,19 +441,19 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 			log.WithFields(log.Fields{
 				"object":    "node",
 				"requestid": r.Context().Value("requestid"),
-				"nodeid":    t["id"],
+				"nodeid":    properties["id"],
 			}).Info("Create")
 
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(fmt.Sprintf("Create node id %s\n", t["id"])))
+			_, _ = w.Write([]byte(fmt.Sprintf("Create node id %s\n", properties["id"])))
 			return
 		} else {
 			log.WithFields(log.Fields{
 				"object":    "node",
 				"requestid": r.Context().Value("requestid"),
-				"nodeid":    t["id"],
+				"nodeid":    properties["id"],
 			}).Info("Create - already exists")
-			msg := fmt.Sprintf("Node with id %s already exists", t["id"])
+			msg := fmt.Sprintf("Node with id %s already exists", properties["id"])
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
@@ -422,7 +467,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 
 		if result.Empty() {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("Node id %s does not exists\n", id)))
+			_, _ = w.Write([]byte(fmt.Sprintf("Node id %s does not exists\n", id)))
 			return
 		}
 	}
@@ -431,20 +476,36 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
 		id := params["id"]
 		values := r.URL.Query()
-		for k, v := range values {
-			query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) SET n.%s = %s ", id, k, v[0])
-			result, _ := graph.Query(query)
-			result.PrettyPrint()
-			log.WithFields(log.Fields{
-				"object":    "node",
-				"requestid": r.Context().Value("requestid"),
-				"nodeid":    id,
-				"attribute": k,
-				"value":     v,
-			}).Info("Update")
+
+		for k := range values {
+			if _, ok := h.AllConfig.NodeFields[name][k]; !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(fmt.Sprintf("Create node failed, %s is no a valid property\n", k)))
+				return
+			}
 		}
+
+		nodeProperties := make([]string, 0, len(values))
+		for k, v := range values {
+			nodeProperties = append(nodeProperties, fmt.Sprintf("n.%s = %v", k, ToString(v[0], h.AllConfig.NodeFields[name][k])))
+		}
+
+		properties := fmt.Sprintf("%s", strings.Join(nodeProperties, ","))
+
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) SET %s RETURN n", id, properties)
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		log.WithFields(log.Fields{
+			"object":     "node",
+			"requestid":  r.Context().Value("requestid"),
+			"nodeid":     id,
+			"properties": properties,
+			//"attribute": k,
+			//"value":     v,
+		}).Info("Update")
+
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("Update node id %s\n", id)))
+		_, _ = w.Write([]byte(fmt.Sprintf("Update node id %s\n", id)))
 		return
 	}
 
@@ -462,7 +523,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		}).Info("Delete")
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("Delete node id %s\n", id)))
+		_, _ = w.Write([]byte(fmt.Sprintf("Delete node id %s\n", id)))
 		return
 	}
 
@@ -490,58 +551,68 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 	// POST
 	if r.Method == http.MethodPost {
 		decoder := json.NewDecoder(r.Body)
-		t := make(map[string]interface{})
-		err := decoder.Decode(&t)
+		bodyJsonMap := make(map[string]interface{})
+
+		err := decoder.Decode(&bodyJsonMap)
+		for k := range bodyJsonMap {
+			if _, ok := h.AllConfig.EdgeFields[name][k]; !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed %s is no a valid property\n", k)))
+				return
+			}
+		}
+
 		if err != nil {
-			panic(err)
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"error":     "Not a valid json",
+			}).Warn("Create failed")
+
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed: %v\n", err)))
+			return
 		}
 
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
-			t["source_id"], t["target_id"])
+			bodyJsonMap["source"], bodyJsonMap["target"])
 		result, _ := graph.Query(query)
 		result.PrettyPrint()
 		if result.Empty() {
-			/*
-				p := make([]string, 0, len(n.Properties))
-					for k, v := range n.Properties {
-						p = append(p, fmt.Sprintf("%s:%v", k, ToString(v)))
-					}
 
-					s := fmt.Sprintf("{%s}", strings.Join(p, ","))
-
-			*/
-			p := make([]string, 0, len(t)-2)
-			for k, v := range t {
-				if k != "source_id" && k != "target_id" {
-					p = append(p, fmt.Sprintf("%s:%v", k, ToString(v)))
+			edgeProperties := make([]string, 0, len(bodyJsonMap)-2)
+			for k, v := range bodyJsonMap {
+				if k != "source" && k != "target" {
+					// Exclude source_id and target_id
+					edgeProperties = append(edgeProperties, fmt.Sprintf("%s:%v", k, ToString(v, h.AllConfig.EdgeFields[name][k])))
 				}
 			}
-			s := fmt.Sprintf("{%s}", strings.Join(p, ","))
+			properties := fmt.Sprintf("{%s}", strings.Join(edgeProperties, ","))
 
 			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge %s]->(b) RETURN r",
-				t["source_id"], t["target_id"], s)
+				bodyJsonMap["source"], bodyJsonMap["target"], properties)
 
 			result, _ := graph.Query(query)
 			result.PrettyPrint()
 			log.WithFields(log.Fields{
 				"object":    "edge",
 				"requestid": r.Context().Value("requestid"),
-				"sourceid":  t["source_id"],
-				"targetid":  t["target_id"],
+				"sourceid":  bodyJsonMap["source"],
+				"targetid":  bodyJsonMap["target"],
 			}).Info("Create")
 
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s\n", t["source_id"], t["target_id"])))
-
+			_, _ = w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s\n", bodyJsonMap["source"], bodyJsonMap["target"])))
 			return
+
 		} else {
 			log.WithFields(log.Fields{
 				"object":    "edge",
 				"requestid": r.Context().Value("requestid"),
-				"sourceid":  t["source_id"],
-				"targetid":  t["target_id"],
+				"sourceid":  bodyJsonMap["source_id"],
+				"targetid":  bodyJsonMap["target_id"],
 			}).Info("Create - already exists")
-			msg := fmt.Sprintf("Edge between source id %s and target id %s already exists", t["source_id"], t["target_id"])
+			msg := fmt.Sprintf("Edge between source id %s and target id %s already exists", bodyJsonMap["source"], bodyJsonMap["target"])
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
@@ -558,7 +629,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		result.PrettyPrint()
 		if result.Empty() {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(fmt.Sprintf("Edge between source id %s and target id %s does not exists\n", sourceId, targetId)))
+			_, _ = w.Write([]byte(fmt.Sprintf("Edge between source id %s and target id %s does not exists\n", sourceId, targetId)))
 			return
 		}
 	}
@@ -568,22 +639,39 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		sourceId := params["source_id"]
 		targetId := params["target_id"]
 		values := r.URL.Query()
-		for k, v := range values {
-			query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' SET r.%s = %s",
-				sourceId, targetId, k, v[0])
-			result, _ := graph.Query(query)
-			result.PrettyPrint()
-			log.WithFields(log.Fields{
-				"object":    "edge",
-				"requestid": r.Context().Value("requestid"),
-				"sourceid":  sourceId,
-				"targetid":  targetId,
-				"attribute": k,
-				"value":     v,
-			}).Info("Update")
+
+		for k := range values {
+			if _, ok := h.AllConfig.EdgeFields[name][k]; !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed, %s is no a valid property\n", k)))
+				return
+			}
 		}
+
+		edgeProperties := make([]string, 0, len(values))
+		for k, v := range values {
+			edgeProperties = append(edgeProperties, fmt.Sprintf("r.%s = %v", k, ToString(v[0], h.AllConfig.EdgeFields[name][k])))
+		}
+
+		properties := fmt.Sprintf("%s", strings.Join(edgeProperties, ","))
+
+		fmt.Printf("%s", properties)
+
+		//for k, v := range values {
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' SET %s RETURN r",
+			sourceId, targetId, properties)
+		result, _ := graph.Query(query)
+		result.PrettyPrint()
+		log.WithFields(log.Fields{
+			"object":     "edge",
+			"requestid":  r.Context().Value("requestid"),
+			"sourceid":   sourceId,
+			"targetid":   targetId,
+			"properties": properties,
+		}).Info("Update")
+		//}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("Update edge between source id %s and target id %s\n", sourceId, targetId)))
+		_, _ = w.Write([]byte(fmt.Sprintf("Update edge between source id %s and target id %s\n", sourceId, targetId)))
 		return
 	}
 
@@ -603,7 +691,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		}).Info("Delete")
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(fmt.Sprintf("Delete edge between source id %s and target id %s\n", sourceId, targetId)))
+		_, _ = w.Write([]byte(fmt.Sprintf("Delete edge between source id %s and target id %s\n", sourceId, targetId)))
 		return
 	}
 }
@@ -613,8 +701,34 @@ func (h HandlerInit) getRedisConnection() redis.Conn {
 	return conn
 }
 
+func ToString(i interface{}, fieldType string) string {
+	if i == nil {
+		return "null"
+	}
+
+	switch fieldType {
+	case "string":
+		s := i.(string)
+		return strconv.Quote(s)
+	case "number":
+		switch i.(type) {
+		case string:
+			return i.(string)
+		case int:
+			return strconv.Itoa(i.(int))
+		case float64:
+			return strconv.FormatFloat(i.(float64), 'f', -1, 64)
+
+		default:
+			return i.(string)
+		}
+	default:
+		return i.(string)
+	}
+}
+
 // From the RedisGraph code base
-func ToString(i interface{}) string {
+func XToString(i interface{}) string {
 	if i == nil {
 		return "null"
 	}
@@ -622,6 +736,7 @@ func ToString(i interface{}) string {
 	switch i.(type) {
 	case string:
 		s := i.(string)
+		//return fmt.Sprintf("'%s'", s)
 		return strconv.Quote(s)
 	case int:
 		return strconv.Itoa(i.(int))
@@ -640,23 +755,13 @@ func ToString(i interface{}) string {
 // From the RedisGraph code base
 func arrayToString(arr []interface{}) string {
 	var arrayLength = len(arr)
-	strArray := []string{}
+	var strArray []string
 	for i := 0; i < arrayLength; i++ {
-		strArray = append(strArray, ToString(arr[i]))
+		strArray = append(strArray, XToString(arr[i]))
 	}
 	return "[" + strings.Join(strArray, ",") + "]"
 }
 
-func alive(w http.ResponseWriter, r *http.Request) {
-
-	var alive = fmt.Sprintf("Alive!\n")
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.Header().Set("Content-Length", strconv.Itoa(len(alive)))
-	lrw := loggingResponseWriter{ResponseWriter: w}
-	lrw.WriteHeader(200)
-
-	w.Write([]byte(alive))
-}
 func nextRequestID() ksuid.KSUID {
 	return ksuid.New()
 }
