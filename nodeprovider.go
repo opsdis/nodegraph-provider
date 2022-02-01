@@ -160,7 +160,6 @@ func main() {
 	var redisConnection = RedisConnection{}
 	err = viper.UnmarshalKey("redis", &redisConnection)
 	if err != nil {
-
 		log.Error("Unable to decode redis connection struct - ", err)
 		os.Exit(1)
 	}
@@ -216,6 +215,7 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("PUT")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("DELETE")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("GET")
+
 	// Edge
 	rtr.HandleFunc("/api/edges/{graph:.+}", handler.edges).Methods("POST")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("PUT")
@@ -286,15 +286,29 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	// Get the name of the graph model
 	name := params["graph"]
 
-	conn := h.getRedisConnection()
+	conn, err := h.getRedisConnection()
+	if err != nil {
+		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
+		return
+	}
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
 	query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
 
 	// result is a QueryResult struct containing the query's generated records and statistics.
-	result, _ := graph.Query(query)
-	result.PrettyPrint()
+	result, err := graph.Query(query)
+	//result.PrettyPrint()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"object":    "edges",
+			"requestid": r.Context().Value("requestid"),
+			"error":     err,
+		}).Error("Get edges")
+
+		sendStatus(w, fmt.Sprintf("Get edge data failed"), http.StatusInternalServerError)
+		return
+	}
 
 	// create a dynamic id for edges
 	count := 0
@@ -309,7 +323,11 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 		edge["source"] = source
 
 		edgeData := r.GetByIndex(1).(*rg.Edge)
-		edge["mainStat"] = edgeData.Properties["mainStat"]
+		for key, value := range edgeData.Properties {
+			edge[key] = value
+		}
+
+		//edge["mainStat"] = edgeData.Properties["mainStat"]
 
 		target := r.GetByIndex(2)
 		edge["target"] = target
@@ -322,16 +340,25 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	// Get nodes
 	query = "Match (n:Node) Return n"
 
-	result, _ = graph.Query(query)
-	result.PrettyPrint()
+	result, err = graph.Query(query)
+	//result.PrettyPrint()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"object":    "nodes",
+			"requestid": r.Context().Value("requestid"),
+			"error":     err,
+		}).Error("Get nodes")
 
-	// create a dynamic id for edges
-	//count = 0
+		sendStatus(w, fmt.Sprintf("Get node data failed"), http.StatusInternalServerError)
+		return
+	}
+
 	var nodes []interface{}
 	for result.Next() {
 		node := make(map[string]interface{})
 		r := result.Record()
 		nodeData := r.GetByIndex(0).(*rg.Node)
+
 		for key, value := range nodeData.Properties {
 			// Add check that correct to field
 
@@ -352,6 +379,7 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// getHealth is used by the data source to verify connection
 func (h HandlerInit) getHealth(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	params := mux.Vars(r)
@@ -364,54 +392,49 @@ func (h HandlerInit) getHealth(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// nodes manage POST, PUT, DELETE and GET for node objects
 func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 
 	params := mux.Vars(r)
 	// Get the name of the graph model
 	name := params["graph"]
 
-	if r.Header.Get("Content-Type") != "" {
-		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
-		if value != "application/json" {
-			msg := "Content-Type header is not application/json"
-			http.Error(w, msg, http.StatusUnsupportedMediaType)
-			return
-		}
+	if h.validateHeader(w, r) {
+		return
 	}
 
-	conn := h.getRedisConnection()
+	conn, err := h.getRedisConnection()
+	if err != nil {
+		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
+		return
+	}
+
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
 
-	// POST
+	// POST node
 	if r.Method == http.MethodPost {
-		decoder := json.NewDecoder(r.Body)
-		properties := make(map[string]interface{})
-		err := decoder.Decode(&properties)
-		if err != nil {
-
-			log.WithFields(log.Fields{
-				"object":    "node",
-				"requestid": r.Context().Value("requestid"),
-				"error":     "Not a valid json",
-			}).Warn("Create failed")
-
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(fmt.Sprintf("Create node failed: %v\n", err)))
+		properties, done := h.validateJsonBody(w, r, h.AllConfig.NodeFields, name)
+		if done {
 			return
-		}
-		for k := range properties {
-			if _, ok := h.AllConfig.NodeFields[name][k]; !ok {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(fmt.Sprintf("Create node failed %s is no a valid property\n", k)))
-				return
-			}
 		}
 
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", properties["id"])
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		result, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"nodeid":    properties["id"],
+				"error":     err,
+			}).Error("Failed to check if node exist")
+
+			sendStatus(w, fmt.Sprintf("Failed to create node %s", properties["id"]), http.StatusInternalServerError)
+			return
+		}
+
 		if result.Empty() {
 			node := rg.Node{Label: "Node", Properties: properties}
 
@@ -426,8 +449,8 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 					"nodeid":    properties["id"],
 					"error":     err,
 				}).Error("Failed to create node")
-				msg := fmt.Sprintf("Failed to create node %s", properties["id"])
-				http.Error(w, msg, http.StatusInternalServerError)
+
+				sendStatus(w, fmt.Sprintf("Failed to create node %s", properties["id"]), http.StatusInternalServerError)
 				return
 			}
 
@@ -437,8 +460,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 				"nodeid":    properties["id"],
 			}).Info("Create")
 
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(fmt.Sprintf("Create node id %s\n", properties["id"])))
+			sendStatus(w, fmt.Sprintf("Create node id %s", properties["id"]), http.StatusCreated)
 			return
 		} else {
 			log.WithFields(log.Fields{
@@ -446,8 +468,8 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 				"requestid": r.Context().Value("requestid"),
 				"nodeid":    properties["id"],
 			}).Info("Create - already exists")
-			msg := fmt.Sprintf("Node with id %s already exists", properties["id"])
-			http.Error(w, msg, http.StatusConflict)
+
+			sendStatus(w, fmt.Sprintf("Node with id %s already exists", properties["id"]), http.StatusConflict)
 			return
 		}
 	}
@@ -459,24 +481,36 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		result, _ := graph.Query(query)
 
 		if result.Empty() {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(fmt.Sprintf("Node id %s does not exists\n", id)))
+			sendStatus(w, fmt.Sprintf("Node id %s does not exists", id), http.StatusNotFound)
 			return
 		}
 	}
 
+	// Read the path parameters
+	id := params["id"]
+
 	// GET node
 	if r.Method == http.MethodGet {
-		id := params["id"]
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", id)
-		result, _ := graph.Query(query)
+		result, err := graph.Query(query)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"id":        id,
+				"error":     err,
+			}).Error("Delete")
+
+			sendStatus(w, fmt.Sprintf("Get failed for %s", id), http.StatusInternalServerError)
+			return
+		}
+
 		var resp = rg.Node{}
 		for result.Next() {
-			// Get the current Record.
 			record := result.Record()
 			resp = *(record.Values()[0]).(*rg.Node)
-
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp.Properties)
@@ -485,13 +519,11 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 
 	// PUT node
 	if r.Method == http.MethodPut {
-		id := params["id"]
 		values := r.URL.Query()
 
 		for k := range values {
 			if _, ok := h.AllConfig.NodeFields[name][k]; !ok {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(fmt.Sprintf("Create node failed, %s is no a valid property\n", k)))
+				sendStatus(w, fmt.Sprintf("Create node failed, %s is no a valid property", k), http.StatusBadRequest)
 				return
 			}
 		}
@@ -504,93 +536,105 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		properties := fmt.Sprintf("%s", strings.Join(nodeProperties, ","))
 
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) SET %s RETURN n", id, properties)
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		_, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"id":        id,
+				"error":     err,
+			}).Error("Delete")
+
+			sendStatus(w, fmt.Sprintf("Update failed for %s", id), http.StatusInternalServerError)
+			return
+		}
+
 		log.WithFields(log.Fields{
 			"object":     "node",
 			"requestid":  r.Context().Value("requestid"),
 			"nodeid":     id,
 			"properties": properties,
-			//"attribute": k,
-			//"value":     v,
 		}).Info("Update")
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf("Update node id %s\n", id)))
+		sendStatus(w, fmt.Sprintf("Update node id %s", id), http.StatusOK)
 		return
 	}
 
-	// Delete node
+	// DELETE node
 	if r.Method == http.MethodDelete {
-		id := params["id"]
-
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) DELETE n", id)
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		_, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"id":        id,
+				"error":     err,
+			}).Error("Delete")
+
+			sendStatus(w, fmt.Sprintf("Delete failed for %s", id), http.StatusInternalServerError)
+			return
+		}
+
 		log.WithFields(log.Fields{
 			"object":    "node",
 			"requestid": r.Context().Value("requestid"),
 			"nodeid":    id,
 		}).Info("Delete")
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf("Delete node id %s\n", id)))
+		sendStatus(w, fmt.Sprintf("Delete node id %s", id), http.StatusOK)
 		return
 	}
 
 }
 
+// edges manage POST, PUT, DELETE and GET for node objects
 func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 	params := mux.Vars(r)
 	// Get the name of the graph model
 	name := params["graph"]
 
-	if r.Header.Get("Content-Type") != "" {
-		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
-		if value != "application/json" {
-			msg := "Content-Type header is not application/json"
-			http.Error(w, msg, http.StatusUnsupportedMediaType)
-			return
-		}
+	if h.validateHeader(w, r) {
+		return
 	}
-	conn := h.getRedisConnection()
+
+	conn, err := h.getRedisConnection()
+	if err != nil {
+		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
+		return
+	}
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
 
-	// POST
+	// POST edge
 	if r.Method == http.MethodPost {
-		decoder := json.NewDecoder(r.Body)
-		bodyJsonMap := make(map[string]interface{})
-
-		err := decoder.Decode(&bodyJsonMap)
-		for k := range bodyJsonMap {
-			if _, ok := h.AllConfig.EdgeFields[name][k]; !ok {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed %s is no a valid property\n", k)))
-				return
-			}
-		}
-
-		if err != nil {
-			log.WithFields(log.Fields{
-				"object":    "edge",
-				"requestid": r.Context().Value("requestid"),
-				"error":     "Not a valid json",
-			}).Warn("Create failed")
-
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed: %v\n", err)))
+		bodyJsonMap, done := h.validateJsonBody(w, r, h.AllConfig.EdgeFields, name)
+		if done {
 			return
 		}
 
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
 			bodyJsonMap["source"], bodyJsonMap["target"])
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
-		if result.Empty() {
+		result, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  bodyJsonMap["source"],
+				"targetid":  bodyJsonMap["target"],
+				"error":     err,
+			}).Error("Failed to check is edge exist")
 
+			sendStatus(w, fmt.Sprintf("Create failed between source id %s and target id %s", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusInternalServerError)
+			return
+		}
+
+		if result.Empty() {
 			edgeProperties := make([]string, 0, len(bodyJsonMap)-2)
 			for k, v := range bodyJsonMap {
 				if k != "source" && k != "target" {
@@ -603,8 +647,21 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge %s]->(b) RETURN r",
 				bodyJsonMap["source"], bodyJsonMap["target"], properties)
 
-			result, _ := graph.Query(query)
-			result.PrettyPrint()
+			_, err := graph.Query(query)
+			//result.PrettyPrint()
+			if err != nil {
+				log.WithFields(log.Fields{
+					"object":    "edge",
+					"requestid": r.Context().Value("requestid"),
+					"sourceid":  bodyJsonMap["source"],
+					"targetid":  bodyJsonMap["target"],
+					"error":     err,
+				}).Error("Failed to create edge")
+
+				sendStatus(w, fmt.Sprintf("Create failed between source id %s and target id %s", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusInternalServerError)
+				return
+			}
+
 			log.WithFields(log.Fields{
 				"object":    "edge",
 				"requestid": r.Context().Value("requestid"),
@@ -612,8 +669,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 				"targetid":  bodyJsonMap["target"],
 			}).Info("Create")
 
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(fmt.Sprintf("Create edge sourceid %s and target %s\n", bodyJsonMap["source"], bodyJsonMap["target"])))
+			sendStatus(w, fmt.Sprintf("Create edge sourceid %s and target %s", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusCreated)
 			return
 
 		} else {
@@ -623,8 +679,8 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 				"sourceid":  bodyJsonMap["source_id"],
 				"targetid":  bodyJsonMap["target_id"],
 			}).Info("Create - already exists")
-			msg := fmt.Sprintf("Edge between source id %s and target id %s already exists", bodyJsonMap["source"], bodyJsonMap["target"])
-			http.Error(w, msg, http.StatusConflict)
+
+			sendStatus(w, fmt.Sprintf("Edge between source id %s and target id %s already exists", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusConflict)
 			return
 		}
 	}
@@ -639,25 +695,38 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		result, _ := graph.Query(query)
 		result.PrettyPrint()
 		if result.Empty() {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(fmt.Sprintf("Edge between source id %s and target id %s does not exists\n", sourceId, targetId)))
+			sendStatus(w, fmt.Sprintf("Edge between source id %s and target id %s does not exists", sourceId, targetId), http.StatusNotFound)
 			return
 		}
 	}
 
+	// Read the path parameters
+	sourceId := params["source_id"]
+	targetId := params["target_id"]
+
 	// GET edge
 	if r.Method == http.MethodGet {
-		sourceId := params["source_id"]
-		targetId := params["target_id"]
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r", sourceId, targetId)
-		result, _ := graph.Query(query)
-		var resp = rg.Edge{} //interface{}
-		for result.Next() {  // Next returns true until the iterator is depleted.
-			// Get the current Record.
+		result, err := graph.Query(query)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  sourceId,
+				"targetid":  targetId,
+				"error":     err,
+			}).Error("Update")
+
+			sendStatus(w, fmt.Sprintf("Update failed between source id %s and target id %s", sourceId, targetId), http.StatusInternalServerError)
+			return
+		}
+
+		var resp = rg.Edge{}
+		for result.Next() {
 			record := result.Record()
 			resp = *(record.Values()[0]).(*rg.Edge)
-
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp.Properties)
@@ -666,14 +735,11 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 	// PUT edge
 	if r.Method == http.MethodPut {
-		sourceId := params["source_id"]
-		targetId := params["target_id"]
 		values := r.URL.Query()
 
 		for k := range values {
 			if _, ok := h.AllConfig.EdgeFields[name][k]; !ok {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(fmt.Sprintf("Create edge failed, %s is no a valid property\n", k)))
+				sendStatus(w, fmt.Sprintf("Create edge failed, %s is no a valid property", k), http.StatusBadRequest)
 				return
 			}
 		}
@@ -685,13 +751,23 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 		properties := fmt.Sprintf("%s", strings.Join(edgeProperties, ","))
 
-		fmt.Printf("%s", properties)
-
-		//for k, v := range values {
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' SET %s RETURN r",
 			sourceId, targetId, properties)
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		_, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  sourceId,
+				"targetid":  targetId,
+				"error":     err,
+			}).Error("Update")
+
+			sendStatus(w, fmt.Sprintf("Update failed between source id %s and target id %s", sourceId, targetId), http.StatusInternalServerError)
+			return
+		}
+
 		log.WithFields(log.Fields{
 			"object":     "edge",
 			"requestid":  r.Context().Value("requestid"),
@@ -699,20 +775,30 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			"targetid":   targetId,
 			"properties": properties,
 		}).Info("Update")
-		//}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf("Update edge between source id %s and target id %s\n", sourceId, targetId)))
+
+		sendStatus(w, fmt.Sprintf("Update edge between source id %s and target id %s", sourceId, targetId), http.StatusOK)
 		return
 	}
 
 	// DELETE edge
 	if r.Method == http.MethodDelete {
-		sourceId := params["source_id"]
-		targetId := params["target_id"]
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' DELETE r",
 			sourceId, targetId)
-		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		_, err := graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"sourceid":  sourceId,
+				"targetid":  targetId,
+				"error":     err,
+			}).Error("Delete")
+
+			sendStatus(w, fmt.Sprintf("Delete failed between source id %s and target id %s", sourceId, targetId), http.StatusInternalServerError)
+			return
+		}
+
 		log.WithFields(log.Fields{
 			"object":    "edge",
 			"requestid": r.Context().Value("requestid"),
@@ -720,15 +806,68 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			"targetid":  targetId,
 		}).Info("Delete")
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf("Delete edge between source id %s and target id %s\n", sourceId, targetId)))
+		sendStatus(w, fmt.Sprintf("Delete edge between source id %s and target id %s", sourceId, targetId), http.StatusOK)
 		return
 	}
 }
 
-func (h HandlerInit) getRedisConnection() redis.Conn {
-	conn, _ := redis.Dial("tcp", fmt.Sprintf("%s:%s", h.AllConfig.RedisConnection.Host, h.AllConfig.RedisConnection.Port))
-	return conn
+// sendStatus send http response and status
+func sendStatus(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(fmt.Sprintf("{\"message\": \"%s\"}\n", message)))
+}
+
+// validateJsonBody validate that the request body is a json and validate that only graph schema fields are present
+func (h HandlerInit) validateJsonBody(w http.ResponseWriter, r *http.Request, fields map[string]map[string]string,
+	name string) (map[string]interface{}, bool) {
+	decoder := json.NewDecoder(r.Body)
+	bodyJsonMap := make(map[string]interface{})
+	err := decoder.Decode(&bodyJsonMap)
+	if err != nil {
+
+		log.WithFields(log.Fields{
+			"object":    "node",
+			"requestid": r.Context().Value("requestid"),
+			"error":     "Not a valid json",
+		}).Warn("Create failed")
+
+		sendStatus(w, fmt.Sprintf("Create failed: %v", err), http.StatusBadRequest)
+		return nil, true
+	}
+
+	for k := range bodyJsonMap {
+		if _, ok := fields[name][k]; !ok {
+			sendStatus(w, fmt.Sprintf("Create failed %s is no a valid property\n", k), http.StatusBadRequest)
+			return nil, true
+		}
+	}
+	return bodyJsonMap, false
+}
+
+// validateHeader validate that Content-Type is application/json
+func (h HandlerInit) validateHeader(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("Content-Type") != "" {
+		value, _ := header.ParseValueAndParams(r.Header, "Content-Type")
+		if value != "application/json" {
+			sendStatus(w, fmt.Sprintf("Content-Type header is not application/json"), http.StatusUnsupportedMediaType)
+			return true
+		}
+	}
+	return false
+}
+
+// getRedisConnection return a redis connection
+func (h HandlerInit) getRedisConnection() (redis.Conn, error) {
+	conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%s", h.AllConfig.RedisConnection.Host, h.AllConfig.RedisConnection.Port))
+	if err != nil {
+		log.WithFields(log.Fields{
+			"object": "db",
+			//"requestid": r.Context().Value("requestid"),
+			"error": err,
+		}).Error("Connect to db")
+	}
+	return conn, err
 }
 
 func ToString(i interface{}, fieldType string) string {
