@@ -9,7 +9,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-// Copyright 2020 Opsdis AB
+// Copyright 2022 Anders Håål
 
 package main
 
