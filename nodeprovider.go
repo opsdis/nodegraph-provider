@@ -9,7 +9,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-// Copyright 2020 Opsdis AB
+// Copyright 2022 Anders Håål
 
 package main
 
@@ -120,19 +120,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	/*
-		var nodes = Nodes{}
-		err = viper.UnmarshalKey("nodes", &nodes)
-		if err != nil {
-
-			log.Error("Unable to decode nodes into struct - ", err)
-			os.Exit(1)
-		}
-	*/
-
 	// Read the graph schema
 	var graphs = map[string]map[string][]interface{}{}
-	err = viper.UnmarshalKey("graphs", &graphs)
+	err = viper.UnmarshalKey("graph_schemas", &graphs)
 	if err != nil {
 		log.Error("Unable to decode node and edge fields into struct - ", err)
 		os.Exit(1)
@@ -222,12 +212,15 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 	// Routes to the create and update of nodes and edges
 	// Node
 	rtr.HandleFunc("/api/nodes/{graph:.+}", handler.nodes).Methods("POST")
+	//rtr.HandleFunc("/api/nodes/{graph:.+}", handler.nodes).Methods("GET")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("PUT")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("DELETE")
+	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("GET")
 	// Edge
 	rtr.HandleFunc("/api/edges/{graph:.+}", handler.edges).Methods("POST")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("PUT")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("DELETE")
+	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("GET")
 	rtr.Use(logcall)
 	rtr.Use(promHandler.promMonitor)
 	http.Handle("/", rtr)
@@ -460,7 +453,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if the node exists
-	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodGet {
 		id := params["id"]
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", id)
 		result, _ := graph.Query(query)
@@ -470,6 +463,24 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(fmt.Sprintf("Node id %s does not exists\n", id)))
 			return
 		}
+	}
+
+	// GET node
+	if r.Method == http.MethodGet {
+		id := params["id"]
+		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", id)
+		result, _ := graph.Query(query)
+		var resp = rg.Node{}
+		for result.Next() {
+			// Get the current Record.
+			record := result.Record()
+			resp = *(record.Values()[0]).(*rg.Node)
+
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp.Properties)
+		return
 	}
 
 	// PUT node
@@ -619,7 +630,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if the edge exists
-	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodGet {
 		sourceId := params["source_id"]
 		targetId := params["target_id"]
 
@@ -632,6 +643,25 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(fmt.Sprintf("Edge between source id %s and target id %s does not exists\n", sourceId, targetId)))
 			return
 		}
+	}
+
+	// GET edge
+	if r.Method == http.MethodGet {
+		sourceId := params["source_id"]
+		targetId := params["target_id"]
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r", sourceId, targetId)
+		result, _ := graph.Query(query)
+		var resp = rg.Edge{} //interface{}
+		for result.Next() {  // Next returns true until the iterator is depleted.
+			// Get the current Record.
+			record := result.Record()
+			resp = *(record.Values()[0]).(*rg.Edge)
+
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp.Properties)
+		return
 	}
 
 	// PUT edge
