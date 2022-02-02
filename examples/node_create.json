@@ -1,0 +1,11 @@
+{
+   "arc__failed": 0.7,
+   "arc__passed": 0.3,
+   "detail__role": "load",
+   "id": "cust-svc-3",
+   "mainStat": 81.0,
+   "secondaryStat": 10.0,
+   "subTitle": "instance:#03",
+   "title": "cust-svc-3"
+}
+

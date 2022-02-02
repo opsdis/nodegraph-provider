@@ -127,10 +127,56 @@ curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes
 - 409 
   - Object already exists - POST
 - 415
-  - Invalid value for header "Content-Type" 
-
+  - Invalid value for header "Content-Type"
 
 
 # Get started
+Install Grafana and datasource https://github.com/exaco/nodegraph-api-plugin.
+Start grafana to allow unsigned plugins
+
+    export GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=hamedkarbasi93-nodegraphapi-datasource ; ./bin/grafana-serve
+
+Start redis with module RedisGraph. Simple way just use docker.
+
+    docker run -p 6379:6379 redislabs/redismod
+    
+Start nodegraph-provider
+
+    go build -o build/nodegraph-provider  *.go
+    ./build/nodegraph-provider
+
+Create a data source in Grafana with the nodegraph-api-plugin and set url to `http://localhost:9393/micro`.
+Name it to `Micro`.
+
+Create a dashboard and select the "Node Graph" plugin. Select data source `Micro`
+ 
+Load the simple graph model directly into RedisGraph 
+
+    cat examples/setup_test.txt | redis-cli --pipe
+
+In Grafana you should now see this.
+![Inital Graph](docs/graph_1.png?raw=true "Start graph")
+
+Add a new node with id `cust-svc-2`
+
+    curl -s -i  -H "Content-Type: application/json" -X POST localhost:9393/api/nodes/micro -d @examples/node_create.json
+
+Create an edge between `lb-1` and `cust-svc-3` 
+
+    curl -s -i  -H "Content-Type: application/json" -X POST localhost:9393/api/edges/micro -d @examples/edge_create.json 
+
+Update metrics on `lb-1`
+
+    curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes/micro/book-svc-1?mainStat=$RANDOM&secondaryStat=$RANDOM&arc__failed=0.1&arc__passed=0.9"
+
+Update metrics on edge between `lb-1` to `cust-svc-1
+    
+    curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/edges/micro/lb-1/cust-svc-1?mainStat=$RANDOM&secondaryStat=$RANDOM"
+
+You should now see something like this.
+![Inital Graph](docs/graph_2.png?raw=true "Updated graph")
+
+
+
 
 

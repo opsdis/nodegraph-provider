@@ -1,0 +1,15 @@
+DEL micro
+GRAPH.QUERY micro "Create (:Node {id: 'lb-1', title: 'lb', subTitle: 'instance:#01', detail__role: 'load', arc__failed: 0, arc__passed: 0, mainStat: 0, secondaryStat: 0})"
+GRAPH.QUERY micro "Create (:Node {id: 'cust-svc-1', title: 'cust-svc-1', subTitle: 'instance:#01', detail__role: 'load', arc__failed: 0, arc__passed: 0, mainStat: 0, secondaryStat: 0})"
+GRAPH.QUERY micro "Create (:Node {id: 'cust-svc-2', title: 'cust-svc-2', subTitle: 'instance:#02', detail__role: 'load', arc__failed: 0, arc__passed: 0, mainStat: 0, secondaryStat: 0})"
+GRAPH.QUERY micro "Create (:Node {id: 'pay-svc-1', title: 'pay-svc-1', subTitle: 'instance:#01', detail__role: 'load', arc__failed: 0, arc__passed: 0, mainStat: 0, secondaryStat: 0})"
+GRAPH.QUERY micro "Create (:Node {id: 'book-svc-1', title: 'book-svc-1', subTitle: 'instance:#01', detail__role: 'load', arc__failed: 0, arc__passed: 0, mainStat: 0, secondaryStat: 0})"
+
+
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'lb-1' AND b.id = 'cust-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'lb-1' AND b.id = 'cust-svc-2' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'cust-svc-1' AND b.id = 'pay-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'cust-svc-1' AND b.id = 'book-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'cust-svc-2' AND b.id = 'pay-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'cust-svc-2' AND b.id = 'book-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
+GRAPH.QUERY micro "MATCH (a:Node),(b:Node) WHERE a.id = 'pay-svc-1' AND b.id = 'book-svc-1' CREATE (a)-[r:Edge {mainStat: 0}]->(b) RETURN r"
