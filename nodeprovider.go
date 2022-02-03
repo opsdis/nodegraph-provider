@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/golang/gddo/httputil/header"
@@ -310,14 +311,10 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// create a dynamic id for edges
-	count := 0
 	var edges []interface{}
 	for result.Next() { // Next returns true until the iterator is depleted.
 		edge := make(map[string]interface{})
 		r := result.Record()
-
-		edge["id"] = count
 
 		source := r.GetByIndex(0)
 		edge["source"] = source
@@ -327,12 +324,10 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 			edge[key] = value
 		}
 
-		//edge["mainStat"] = edgeData.Properties["mainStat"]
-
 		target := r.GetByIndex(2)
 		edge["target"] = target
 
-		count = count + 1
+		edge["id"] = fmt.Sprintf("%s:%s", source, target)
 
 		edges = append(edges, edge)
 	}
@@ -436,6 +431,14 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if result.Empty() {
+			for k, v := range properties {
+				_, err := validateDataType(v, h.AllConfig.NodeFields[name][k])
+				if err != nil {
+					sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
+						k, h.AllConfig.NodeFields[name][k]), http.StatusBadRequest)
+					return
+				}
+			}
 			node := rg.Node{Label: "Node", Properties: properties}
 
 			graph.AddNode(&node)
@@ -530,7 +533,13 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 
 		nodeProperties := make([]string, 0, len(values))
 		for k, v := range values {
-			nodeProperties = append(nodeProperties, fmt.Sprintf("n.%s = %v", k, ToString(v[0], h.AllConfig.NodeFields[name][k])))
+			value, err := validateDataType(v[0], h.AllConfig.NodeFields[name][k])
+			if err != nil {
+				sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
+					k, h.AllConfig.NodeFields[name][k]), http.StatusBadRequest)
+				return
+			}
+			nodeProperties = append(nodeProperties, fmt.Sprintf("n.%s = %v", k, value))
 		}
 
 		properties := fmt.Sprintf("%s", strings.Join(nodeProperties, ","))
@@ -620,7 +629,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN n,r,m",
 			bodyJsonMap["source"], bodyJsonMap["target"])
 		result, err := graph.Query(query)
-		result.PrettyPrint()
+		//result.PrettyPrint()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"object":    "edge",
@@ -639,7 +648,13 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			for k, v := range bodyJsonMap {
 				if k != "source" && k != "target" {
 					// Exclude source_id and target_id
-					edgeProperties = append(edgeProperties, fmt.Sprintf("%s:%v", k, ToString(v, h.AllConfig.EdgeFields[name][k])))
+					value, err := validateDataType(v, h.AllConfig.EdgeFields[name][k])
+					if err != nil {
+						sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
+							k, h.AllConfig.EdgeFields[name][k]), http.StatusBadRequest)
+						return
+					}
+					edgeProperties = append(edgeProperties, fmt.Sprintf("%s:%v", k, value))
 				}
 			}
 			properties := fmt.Sprintf("{%s}", strings.Join(edgeProperties, ","))
@@ -750,7 +765,13 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 		edgeProperties := make([]string, 0, len(values))
 		for k, v := range values {
-			edgeProperties = append(edgeProperties, fmt.Sprintf("r.%s = %v", k, ToString(v[0], h.AllConfig.EdgeFields[name][k])))
+			value, err := validateDataType(v[0], h.AllConfig.EdgeFields[name][k])
+			if err != nil {
+				sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
+					k, h.AllConfig.EdgeFields[name][k]), http.StatusBadRequest)
+				return
+			}
+			edgeProperties = append(edgeProperties, fmt.Sprintf("r.%s = %v", k, value))
 		}
 
 		properties := fmt.Sprintf("%s", strings.Join(edgeProperties, ","))
@@ -874,65 +895,40 @@ func (h HandlerInit) getRedisConnection() (redis.Conn, error) {
 	return conn, err
 }
 
-func ToString(i interface{}, fieldType string) string {
+func validateDataType(i interface{}, fieldType string) (string, error) {
 	if i == nil {
-		return "null"
+		return "", errors.New("data type error")
 	}
 
 	switch fieldType {
 	case "string":
 		s := i.(string)
-		return strconv.Quote(s)
+		return strconv.Quote(s), nil
 	case "number":
 		switch i.(type) {
 		case string:
-			return i.(string)
+			// Check if int
+			_, err := strconv.Atoi(i.(string))
+			if err != nil {
+				// Check if float
+				_, err := strconv.ParseFloat(i.(string), 64)
+				if err != nil {
+					return "", err
+				}
+				return i.(string), nil
+			}
+			return i.(string), nil
 		case int:
-			return strconv.Itoa(i.(int))
+			return strconv.Itoa(i.(int)), nil
 		case float64:
-			return strconv.FormatFloat(i.(float64), 'f', -1, 64)
+			return strconv.FormatFloat(i.(float64), 'f', -1, 64), nil
 
 		default:
-			return i.(string)
+			return "", errors.New("data type error")
 		}
 	default:
-		return i.(string)
+		return "", errors.New("data type error")
 	}
-}
-
-// From the RedisGraph code base
-func XToString(i interface{}) string {
-	if i == nil {
-		return "null"
-	}
-
-	switch i.(type) {
-	case string:
-		s := i.(string)
-		//return fmt.Sprintf("'%s'", s)
-		return strconv.Quote(s)
-	case int:
-		return strconv.Itoa(i.(int))
-	case float64:
-		return strconv.FormatFloat(i.(float64), 'f', -1, 64)
-	case bool:
-		return strconv.FormatBool(i.(bool))
-	case []interface{}:
-		arr := i.([]interface{})
-		return arrayToString(arr)
-	default:
-		panic("Unrecognized type to convert to string")
-	}
-}
-
-// From the RedisGraph code base
-func arrayToString(arr []interface{}) string {
-	var arrayLength = len(arr)
-	var strArray []string
-	for i := 0; i < arrayLength; i++ {
-		strArray = append(strArray, XToString(arr[i]))
-	}
-	return "[" + strings.Join(strArray, ",") + "]"
 }
 
 func nextRequestID() ksuid.KSUID {
