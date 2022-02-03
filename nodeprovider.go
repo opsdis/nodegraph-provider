@@ -617,10 +617,10 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
+		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN n,r,m",
 			bodyJsonMap["source"], bodyJsonMap["target"])
 		result, err := graph.Query(query)
-		//result.PrettyPrint()
+		result.PrettyPrint()
 		if err != nil {
 			log.WithFields(log.Fields{
 				"object":    "edge",
@@ -647,8 +647,9 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			query := fmt.Sprintf("MATCH (a:Node),(b:Node) WHERE a.id = '%s' AND b.id = '%s' CREATE (a)-[r:Edge %s]->(b) RETURN r",
 				bodyJsonMap["source"], bodyJsonMap["target"], properties)
 
-			_, err := graph.Query(query)
+			result, err := graph.Query(query)
 			//result.PrettyPrint()
+
 			if err != nil {
 				log.WithFields(log.Fields{
 					"object":    "edge",
@@ -658,10 +659,13 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 					"error":     err,
 				}).Error("Failed to create edge")
 
-				sendStatus(w, fmt.Sprintf("Create failed between source id %s and target id %s", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusInternalServerError)
+				sendStatus(w, fmt.Sprintf("Create edge failed between source id %s and target id %s", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusInternalServerError)
 				return
 			}
-
+			if result.Empty() {
+				sendStatus(w, fmt.Sprintf("Create edge failed between sourceid %s and target %s since some node(s) do not exists", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusBadRequest)
+				return
+			}
 			log.WithFields(log.Fields{
 				"object":    "edge",
 				"requestid": r.Context().Value("requestid"),
