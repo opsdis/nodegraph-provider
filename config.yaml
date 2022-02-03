@@ -24,9 +24,13 @@ redis:
   port: "6379"
   db: 0
 
+# The graph_schema define the field name and data type for the output to the data source.
+# The field names are also used for the api calls to create, update and delete the nodes and edges.
+# The only field not used in these api calls are the edge id that is automatically set to sourceid:targetid of
+#  the nodes
 graph_schemas:
   micro:
-    # Just for testing
+    # An example
     node_fields:
       - field_name: "id"
         type: "string"
@@ -35,7 +39,7 @@ graph_schemas:
       - field_name: "subTitle"
         type: "string"
       - field_name: "mainStat"
-        type: "string"
+        type: "number"
         displayName: "CPU"
       - field_name: "secondaryStat"
         type: "number"
@@ -49,6 +53,7 @@ graph_schemas:
         type: "string"
         displayName: "Role"
     edge_fields:
+      # id is never used in the api, will be set dynamically to nodes sourceid:targetid
       - field_name: "id"
         type: "string"
       - field_name: "source"
@@ -61,6 +66,7 @@ graph_schemas:
         type: "number"
       - field_name: "detail__traffic"
         type: "string"
+        displayName: "Traffic"
 
   test:
     # Just add your own schema

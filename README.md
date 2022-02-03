@@ -150,9 +150,9 @@ Name it to `Micro`.
 
 Create a dashboard and select the "Node Graph" plugin. Select data source `Micro`
  
-Load the simple graph model directly into RedisGraph 
+Load the simple graph model 
 
-    cat examples/setup_test.txt | redis-cli --pipe
+    ./examples/setup_test.sh
 
 In Grafana you should now see this.
 ![Inital Graph](docs/graph_1.png?raw=true "Start graph")
@@ -176,7 +176,9 @@ Update metrics on edge between `lb-1` to `cust-svc-1
 You should now see something like this.
 ![Inital Graph](docs/graph_2.png?raw=true "Updated graph")
 
+# Use case
 
+### Graph data center networking with Cisco ACI
 
 
 
