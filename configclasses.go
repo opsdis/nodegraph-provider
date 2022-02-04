@@ -13,17 +13,22 @@
 
 package main
 
+import "github.com/gomodule/redigo/redis"
+
 type AllConfig struct {
 	AllGraphs       map[string]map[string][]interface{}
 	NodeFields      map[string]map[string]string
 	EdgeFields      map[string]map[string]string
 	RedisConnection RedisConnection
+	RedisPool       *redis.Pool
 }
 
 type RedisConnection struct {
-	Host string `mapstructure:"host"`
-	Port string `mapstructure:"port"`
-	DB   string `mapstructure:"db"`
+	Host      string //`mapstructure:"host"`
+	Port      string //`mapstructure:"port"`
+	DB        string //`mapstructure:"db"`
+	MaxActive int    //`mapstructure:"max_active"`
+	MaxIdle   int    //`mapstructure:"max_idle"`
 }
 
 type Field struct {

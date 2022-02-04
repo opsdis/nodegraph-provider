@@ -93,6 +93,8 @@ func main() {
 	viper.AddConfigPath("/usr/local/etc/nodegraph-provider")
 	viper.AddConfigPath("/etc/nodegraph-provider")
 
+	//viper.SetTypeByDefaultValue(true)
+
 	if *usage {
 		flag.Usage()
 		os.Exit(0)
@@ -157,12 +159,29 @@ func main() {
 		}
 		edgeFields[graphName] = edges
 	}
+
 	// Read the redis connection configuration
 	var redisConnection = RedisConnection{}
-	err = viper.UnmarshalKey("redis", &redisConnection)
-	if err != nil {
-		log.Error("Unable to decode redis connection struct - ", err)
-		os.Exit(1)
+	redisConnection.Host = viper.GetString("redis.host")
+	redisConnection.Port = viper.GetString("redis.port")
+	redisConnection.DB = viper.GetString("redis.db")
+	redisConnection.MaxActive = viper.GetInt("redis.max_active")
+	redisConnection.MaxIdle = viper.GetInt("redis.max_idle")
+
+	var pool *redis.Pool
+
+	// Redis connection pool
+	pool = &redis.Pool{
+		MaxIdle:   redisConnection.MaxIdle,
+		MaxActive: redisConnection.MaxActive,
+		Dial: func() (redis.Conn, error) {
+			conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%s", redisConnection.Host, redisConnection.Port))
+			if err != nil {
+				log.Printf("ERROR: fail init redis pool: %s", err.Error())
+				os.Exit(1)
+			}
+			return conn, err
+		},
 	}
 
 	allConfig := AllConfig{
@@ -170,6 +189,7 @@ func main() {
 		NodeFields:      nodeFields,
 		EdgeFields:      edgeFields,
 		RedisConnection: redisConnection,
+		RedisPool:       pool,
 	}
 
 	handler := &HandlerInit{allConfig}
@@ -189,7 +209,7 @@ func main() {
 	setupRoutes(handler, promHandler)
 
 	log.Info(fmt.Sprintf("%s starting on port %d", ExporterName, viper.GetInt("port")))
-	log.Info(fmt.Sprintf("Read timeout %s, Write timeout %s", viper.GetDuration("httpserver.read_timeout")*time.Second, viper.GetDuration("httpserver.write_timeout")*time.Second))
+	log.Info(fmt.Sprintf("connecting to redis at %s:%s on db %s using pool max active %v and max idle %v", redisConnection.Host, redisConnection.Port, redisConnection.DB, redisConnection.MaxActive, redisConnection.MaxIdle))
 	s := &http.Server{
 		ReadTimeout:  viper.GetDuration("httpserver.read_timeout") * time.Second,
 		WriteTimeout: viper.GetDuration("httpserver.write_timeout") * time.Second,
@@ -287,17 +307,11 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	// Get the name of the graph model
 	name := params["graph"]
 
-	conn, err := h.getRedisConnection()
-	if err != nil {
-		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
-		return
-	}
+	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
 	query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
-
-	// result is a QueryResult struct containing the query's generated records and statistics.
 	result, err := graph.Query(query)
 	//result.PrettyPrint()
 	if err != nil {
@@ -307,7 +321,7 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 			"error":     err,
 		}).Error("Get edges")
 
-		sendStatus(w, fmt.Sprintf("Get edge data failed"), http.StatusInternalServerError)
+		sendStatus(w, fmt.Sprintf("Get edge data failed ", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -398,12 +412,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.getRedisConnection()
-	if err != nil {
-		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
-		return
-	}
-
+	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
@@ -610,11 +619,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.getRedisConnection()
-	if err != nil {
-		sendStatus(w, "Failed to connect to db", http.StatusServiceUnavailable)
-		return
-	}
+	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
 
 	graph := rg.GraphNew(name, conn)
@@ -880,19 +885,6 @@ func (h HandlerInit) validateHeader(w http.ResponseWriter, r *http.Request) bool
 		}
 	}
 	return false
-}
-
-// getRedisConnection return a redis connection
-func (h HandlerInit) getRedisConnection() (redis.Conn, error) {
-	conn, err := redis.Dial("tcp", fmt.Sprintf("%s:%s", h.AllConfig.RedisConnection.Host, h.AllConfig.RedisConnection.Port))
-	if err != nil {
-		log.WithFields(log.Fields{
-			"object": "db",
-			//"requestid": r.Context().Value("requestid"),
-			"error": err,
-		}).Error("Connect to db")
-	}
-	return conn, err
 }
 
 func validateDataType(i interface{}, fieldType string) (string, error) {

@@ -35,15 +35,14 @@ func ExporterNameAsEnv() string {
 // SetDefaultValues define all default values
 func SetDefaultValues() {
 
-	// If set as env vars use the ExporterName as prefix like ACI_EXPORTER_PORT for the port var
+	// If set as env vars use the ExporterName as prefix like NODEGRAPH_PROVIDER_PORT for the port var
 	viper.SetEnvPrefix(ExporterNameAsEnv())
 
 	// All fields with . will be replaced with _ for ENV vars
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
-	// aci-exporter
-	viper.SetDefault("port", 9090)
+	viper.SetDefault("port", 9393)
 	viper.BindEnv("port")
 	viper.SetDefault("logfile", "")
 	viper.BindEnv("logfile")
@@ -51,38 +50,22 @@ func SetDefaultValues() {
 	viper.BindEnv("logformat")
 	viper.SetDefault("config", "config")
 	viper.BindEnv("config")
-	viper.SetDefault("prefix", "nodeprovider_")
+	viper.SetDefault("prefix", "nodegraph_provider_")
 	viper.BindEnv("prefix")
 
 	// If set to true response will always be in openmetrics format
 	viper.SetDefault("openmetrics", false)
 	viper.BindEnv("openmetrics")
 
-	// HTTPCLient
-	viper.SetDefault("HTTPClient.timeout", 0)
-	viper.BindEnv("HTTPClient.timeout")
-
-	viper.SetDefault("HTTPClient.keepalive", 15)
-	viper.BindEnv("HTTPClient.keepalive")
-
-	// This is currently not used
-	viper.SetDefault("HTTPClient.tlshandshaketimeout", 10)
-	viper.BindEnv("HTTPClient.tlshandshaketimeout")
-
-	viper.SetDefault("HTTPClient.insecureHTTPS", true)
-	viper.BindEnv("HTTPClient.insecureHTTPS")
-
-	// HTTPServer
-	viper.SetDefault("httpserver.read_timeout", 0)
-	viper.BindEnv("httpserver.read_timeout")
-
-	viper.SetDefault("httpserver.write_timeout", 0)
-	viper.BindEnv("httpserver.write_timeout")
-
+	// Redis
 	viper.SetDefault("redis.host", "localhost")
 	viper.BindEnv("redis.host")
-	viper.SetDefault("redis.port", 6379)
+	viper.SetDefault("redis.port", "6379")
 	viper.BindEnv("redis.port")
 	viper.SetDefault("redis.db", 0)
 	viper.BindEnv("redis.db")
+	viper.SetDefault("redis.max_idle", 10)
+	viper.BindEnv("redis.max_idle")
+	viper.SetDefault("redis.max_active", 50)
+	viper.BindEnv("redis.max_active")
 }

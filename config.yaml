@@ -1,28 +1,25 @@
-# Exporter port
-port: 9393
+# Default values are commented
+# All default values can be overridden using environment values using NODEGRAPH_PROVIDER_XYZ
+# Nested values should be separated with _
+
+
+# API port
+# port: 9393
 # Configuration file name default without postfix
-config: config
+#config: config
 # The prefix of the metrics
-prefix: nodegraph_provider
+#prefix: nodegraph_provider
 
-
-# Http client settings used to access apic
-httpclient:
-  insecurehttps: true
-  # Default is 15 seconds
-  keepalive: 15
-  # Zero means no timeout
-  timeout: 0
-
-# Http server settings - this is for the web server aci-exporter expose
-httpserver:
-  read_timeout: 0
-  write_timeout: 0
 
 redis:
-  host: "172.25.1.50"
-  port: "6379"
-  db: 0
+#  host: "localhost"
+#  port: "6379"
+#  db: 0
+  #maxactive: 350
+#  max_idle: 10
+
+
+# The following do not have any default values
 
 # The graph_schema define the field name and data type for the output to the data source.
 # The field names are also used for the api calls to create, update and delete the nodes and edges.
