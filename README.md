@@ -176,9 +176,6 @@ Update metrics on edge between `lb-1` to `cust-svc-1
 You should now see something like this.
 ![Inital Graph](docs/graph_2.png?raw=true "Updated graph")
 
-# Use case
-
-### Graph data center networking with Cisco ACI
 
 
 
