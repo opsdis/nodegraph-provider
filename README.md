@@ -18,7 +18,7 @@ https://grafana.com/docs/grafana/latest/visualizations/node-graph/.
 The graph model must be compatible to the data model for nodes and edges in the Node Graph panel. 
 The attributes allowed is specified at https://grafana.com/docs/grafana/latest/visualizations/node-graph/#data-api.
 
-In the nodegraph-provider each instance schema of a model are described in the configuration file, e.g.
+In the nodegraph-provider each instance schema of a model is described in the configuration file, e.g.
 
 ```yaml
 graph_schemas:
@@ -108,7 +108,10 @@ Node example:
 }
 ```
 
-PUT takes query parameters with the fields to be updated.
+PUT takes query parameters with the fields to be updated and id as a path parameter.
+
+DELETE and GET do not have any query parameters. 
+
 
 ```bash
 curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes/micro/lb-01?arc__failed=0.1?arc__passed=0.9"
@@ -116,6 +119,7 @@ curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes
 
 
 ### Return status
+
 - 200
   - Successful - PUT, DELETE, GET
 - 201
@@ -145,6 +149,11 @@ Start nodegraph-provider
 
     go build -o build/nodegraph-provider  *.go
     ./build/nodegraph-provider
+    
+To see all options 
+
+    ./build/nodegraph-provider -h
+
 
 Create a data source in Grafana with the nodegraph-api-plugin and set url to `http://localhost:9393/micro`.
 Name it to `Micro`.
