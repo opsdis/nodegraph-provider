@@ -242,6 +242,9 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("PUT")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("DELETE")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("GET")
+
+	// Controller
+	rtr.HandleFunc("/api/controller/{graph:.+}/delete-all", handler.deleteAll).Methods("POST")
 	rtr.Use(logcall)
 	rtr.Use(promHandler.promMonitor)
 	http.Handle("/", rtr)
@@ -258,6 +261,22 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 
 type HandlerInit struct {
 	AllConfig AllConfig
+}
+
+func (h HandlerInit) deleteAll(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	// Get the name of the graph model
+	name := params["graph"]
+
+	conn := h.AllConfig.RedisPool.Get()
+	defer conn.Close()
+
+	// Check if the graph key exists, if not return 404
+	exists, _ := conn.Do("DEL", name)
+	if exists == int64(0) {
+		sendStatus(w, fmt.Sprintf("No data exists for graph %s", name), http.StatusNotFound)
+		return
+	}
 }
 
 func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
@@ -309,6 +328,13 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 
 	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
+
+	// Check if the graph key exists, if not return 404
+	exists, _ := conn.Do("EXISTS", name)
+	if exists == int64(0) {
+		sendStatus(w, fmt.Sprintf("No data exists for graph %s", name), http.StatusNotFound)
+		return
+	}
 
 	graph := rg.GraphNew(name, conn)
 	query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
@@ -562,7 +588,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 				"requestid": r.Context().Value("requestid"),
 				"id":        id,
 				"error":     err,
-			}).Error("Delete")
+			}).Error("Update")
 
 			sendStatus(w, fmt.Sprintf("Update failed for %s", id), http.StatusInternalServerError)
 			return
@@ -683,7 +709,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if result.Empty() {
-				sendStatus(w, fmt.Sprintf("Create edge failed between sourceid %s and target %s since some node(s) do not exists", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusBadRequest)
+				sendStatus(w, fmt.Sprintf("Create edge failed between source id %s and target id %s since some node(s) do not exists", bodyJsonMap["source"], bodyJsonMap["target"]), http.StatusBadRequest)
 				return
 			}
 			log.WithFields(log.Fields{
@@ -717,7 +743,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
 			sourceId, targetId)
 		result, _ := graph.Query(query)
-		result.PrettyPrint()
+		//result.PrettyPrint()
 		if result.Empty() {
 			sendStatus(w, fmt.Sprintf("Edge between source id %s and target id %s does not exists", sourceId, targetId), http.StatusNotFound)
 			return
