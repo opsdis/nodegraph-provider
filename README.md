@@ -62,8 +62,8 @@ graph_schemas:
 The `graph_schemas` can have multiple named schema definitions. Above is a schema called `micro`.
 The name is used as a key in all API accesses to support multiple instances. E.g. when setting up the URL in the
 Node Graph API Datasource Plugin we define it as part of the path, `http://localhost:9393/micro`.
-This enables nodegraph-provider to support multiple datasources in a single instance.
-The schema defines the different fields and the type, string or number, that are allowd for the specific schema. 
+This enables nodegraph-provider to support multiple data sources in a single instance.
+The schema defines the different fields and the type, string or number, that are allowed for the specific schema. 
   
 
 # API endpoints
@@ -86,6 +86,8 @@ The schema defines the different fields and the type, string or number, that are
 	GET /api/edges/{graph_schema}/{source_id}/{target_id}
 	PUT /api/edges/{graph_schema}/{source_id}/{target_id}
 	DELETE /api/edges/{graph_schema}/{source_id}/{target_id}
+	
+	POST /api/controller/{graph_schema}/delete-all
 	
 All endpoint expects the header "Content-Type" set to "application/json"
 
@@ -111,8 +113,7 @@ PUT takes query parameters with the fields to be updated.
 ```bash
 curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes/micro/lb-01?arc__failed=0.1?arc__passed=0.9"
 ```
-    
-> PUT should maybe be renamed to PATCH.
+
 
 ### Return status
 - 200
@@ -148,14 +149,14 @@ Start nodegraph-provider
 Create a data source in Grafana with the nodegraph-api-plugin and set url to `http://localhost:9393/micro`.
 Name it to `Micro`.
 
-Create a dashboard and select the "Node Graph" plugin. Select data source `Micro`
+Create a dashboard and select the "Node Graph" plugin. Select the data source `Micro`.
  
 Load the simple graph model 
 
     ./examples/setup_test.sh
 
 In Grafana you should now see this.
-![Inital Graph](docs/graph_1.png?raw=true "Start graph")
+![Initial Graph](docs/graph_1.png?raw=true "Start graph")
 
 Add a new node with id `cust-svc-2`
 
@@ -174,7 +175,7 @@ Update metrics on edge between `lb-1` to `cust-svc-1
     curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/edges/micro/lb-1/cust-svc-1?mainStat=$RANDOM&secondaryStat=$RANDOM"
 
 You should now see something like this.
-![Inital Graph](docs/graph_2.png?raw=true "Updated graph")
+![Updated Graph](docs/graph_2.png?raw=true "Updated graph")
 
 
 
