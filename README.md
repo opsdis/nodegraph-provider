@@ -186,6 +186,11 @@ Update metrics on edge between `lb-1` to `cust-svc-1
 You should now see something like this.
 ![Updated Graph](docs/graph_2.png?raw=true "Updated graph")
 
+# Demo examples
+Checkout the [tempo_trace_aggregation](https://github.com/opsdis/tempo_trace_aggregation) project
+where nodegraph-provider is used to create a "dynamic service map" based on
+aggregated traces stored in [Grafana Tempo](https://github.com/grafana/tempo).
+
 
 
 
