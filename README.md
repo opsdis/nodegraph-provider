@@ -12,6 +12,7 @@ To create a model the nodegraph-provider expose api endpoints to create and upda
 The attributes that can be used is limited to the attributes of the Grafana Node Graph panel plugin, 
 https://grafana.com/docs/grafana/latest/visualizations/node-graph/.
 
+![Overview](docs/nodegraph-provider.png?raw=true "Overview")
 
 # Graph schema model
 
