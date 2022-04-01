@@ -14,6 +14,15 @@ https://grafana.com/docs/grafana/latest/visualizations/node-graph/.
 
 ![Overview](docs/nodegraph-provider.png?raw=true "Overview")
 
+# Configuration
+For available configuration check out the `config.yaml`. All configuration can be overridden by environment variables 
+except the `graph_schemas`.
+
+Prefix all configuration varaibles with `NODEGRAPH_PROVIDER_` and replace `.` with `_`, e.g. set the redis server:
+
+    export NODEGRAPH_PROVIDER_REDIS_HOST=my_redis_host
+    
+
 # Graph schema model
 
 The graph model must be compatible to the data model for nodes and edges in the Node Graph panel. 
@@ -186,6 +195,19 @@ Update metrics on edge between `lb-1` to `cust-svc-1
 
 You should now see something like this.
 ![Updated Graph](docs/graph_2.png?raw=true "Updated graph")
+
+# Build docker 
+Use the Dockerfile in the root directory of the project
+
+     docker build --tag nodegraph-provider .
+     
+To run the image a config file must be mounted
+    
+     docker run -p 9393:9393 -v $(pwd)/config_tempo.yaml:/app/config.yaml nodegraph-provider
+    
+Environment variables can be set to override defaults and config file
+
+     docker run -p 9393:9393 -v $(pwd)/config_tempo.yaml:/app/config.yaml -e NODEGRAPH_PROVIDER_PORT=9393 -e NODEGRAPH_PROVIDER_REDIS_HOST=localhost -e NODEGRAPH_PROVIDER_REDIS_PORT=6379  nodegraph-provider 
 
 # Demo examples
 Checkout the [tempo_trace_aggregation](https://github.com/opsdis/tempo_trace_aggregation) project
