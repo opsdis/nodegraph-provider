@@ -80,6 +80,8 @@ The schema defines the different fields and the type, string or number, that are
 
 # API endpoints
 
+All endpoint expects the header "Content-Type" set to "application/json"
+
 ## Data source API
    
     GET /{graph_schema}/api/graph/data
@@ -98,10 +100,6 @@ The schema defines the different fields and the type, string or number, that are
 	GET /api/edges/{graph_schema}/{source_id}/{target_id}
 	PUT /api/edges/{graph_schema}/{source_id}/{target_id}
 	DELETE /api/edges/{graph_schema}/{source_id}/{target_id}
-	
-	POST /api/controller/{graph_schema}/delete-all
-	
-All endpoint expects the header "Content-Type" set to "application/json"
 
 POST operations expect a json body. The content should only include the field names in the graph schema.
 
@@ -129,8 +127,56 @@ DELETE and GET do not have any query parameters.
 curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/nodes/micro/lb-01?arc__failed=0.1?arc__passed=0.9"
 ```
 
+## Manage a complete graph
+The api endpoints will operate on a complete graph. The POST will first
+delete before create. For a client that have the full "picture" of the graph
+model, this is the most effective endpoint to use.
 
-### Return status
+    POST /api/graph/{graph_schema}
+    DELETE /api/graph/{graph_schema}
+
+The POST endpoint requiere a body of a list of nodes and edges, e.g.
+```json
+{
+  "nodes": [
+    {
+      "id": "lb-1",
+      "title": "lb",
+      "subTitle": "instance:#01",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    ....
+    
+  ],
+  "edges": [
+    {
+      "source": "lb-1",
+      "target": "cust-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    ....
+  ]
+}
+```
+
+Please see the `examples/graph.json` and `examples/setup_graph.sh` for a
+complete example.
+
+## Deprecated API	
+The following api are deprecated: 
+
+    POST /api/controller/{graph_schema}/delete-all
+
+
+
+
+
+## Return status
 
 - 200
   - Successful - PUT, DELETE, GET
@@ -172,9 +218,13 @@ Name it to `Micro`.
 
 Create a dashboard and select the "Node Graph" plugin. Select the data source `Micro`.
  
-Load the simple graph model 
+Load the simple graph model by create nodes and edges:
 
     ./examples/setup_test.sh
+    
+Or run the example to create a complete graph:
+
+    ./examples/setup_graph.sh
 
 In Grafana you should now see this.
 ![Initial Graph](docs/graph_1.png?raw=true "Start graph")

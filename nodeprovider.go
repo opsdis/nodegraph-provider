@@ -203,7 +203,7 @@ func main() {
 		[]string{"url", "method", "status"},
 	)
 
-	promHandler := &PromethusInit{responseTime}
+	promHandler := &PrometheusInit{responseTime}
 
 	// Setup handler for routes
 	setupRoutes(handler, promHandler)
@@ -218,7 +218,7 @@ func main() {
 	log.Fatal(s.ListenAndServe())
 }
 
-func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
+func setupRoutes(handler *HandlerInit, promHandler *PrometheusInit) {
 
 	rtr := mux.NewRouter()
 
@@ -243,8 +243,13 @@ func setupRoutes(handler *HandlerInit, promHandler *PromethusInit) {
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("DELETE")
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("GET")
 
+	// Graph
+	rtr.HandleFunc("/api/graph/{graph:.+}", handler.createGraph).Methods("POST")
+	rtr.HandleFunc("/api/graph/{graph:.+}", handler.deleteGraph).Methods("DELETE")
+
 	// Controller
-	rtr.HandleFunc("/api/controller/{graph:.+}/delete-all", handler.deleteAll).Methods("POST")
+	rtr.HandleFunc("/api/controller/{graph:.+}/delete-all", handler.deleteGraph).Methods("POST")
+
 	rtr.Use(logcall)
 	rtr.Use(promHandler.promMonitor)
 	http.Handle("/", rtr)
@@ -263,7 +268,7 @@ type HandlerInit struct {
 	AllConfig AllConfig
 }
 
-func (h HandlerInit) deleteAll(w http.ResponseWriter, r *http.Request) {
+func (h HandlerInit) deleteGraph(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
 	// Get the name of the graph model
 	name := params["graph"]
@@ -277,6 +282,163 @@ func (h HandlerInit) deleteAll(w http.ResponseWriter, r *http.Request) {
 		sendStatus(w, fmt.Sprintf("No data exists for graph %s", name), http.StatusNotFound)
 		return
 	}
+}
+
+func (h HandlerInit) createGraph(w http.ResponseWriter, r *http.Request) {
+	params := mux.Vars(r)
+	// Get the graphName of the graph model
+	graphName := params["graph"]
+
+	decoder := json.NewDecoder(r.Body)
+	bodyJsonMap := make(map[string][]interface{})
+	err := decoder.Decode(&bodyJsonMap)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"object":    "graph",
+			"graph":     graphName,
+			"requestid": r.Context().Value("requestid"),
+			"error":     "Not a valid json",
+		}).Warn("Create failed")
+
+		sendStatus(w, fmt.Sprintf("Not a valid json: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Check if nodes and edges is in the body
+	_, ok := bodyJsonMap["nodes"]
+	if !ok {
+		sendStatus(w, fmt.Sprintf("No nodes in the json"), http.StatusBadRequest)
+		return
+	}
+	_, ok = bodyJsonMap["edges"]
+	if !ok {
+		sendStatus(w, fmt.Sprintf("No edges in the json"), http.StatusBadRequest)
+		return
+	}
+
+	var nodes []*rg.Node
+
+	// Map the name of the node to the Node
+	var nodesMap = make(map[interface{}]*rg.Node)
+
+	// Validate fields
+	for _, nodeData := range bodyJsonMap["nodes"] {
+		switch value := nodeData.(type) {
+		case map[string]interface{}:
+			for k, v := range value {
+				_, err := validateDataType(v, h.AllConfig.NodeFields[graphName][k])
+				if err != nil {
+					sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
+						k, h.AllConfig.NodeFields[graphName][k]), http.StatusBadRequest)
+					return
+				}
+			}
+			node := rg.Node{Label: "Node", Properties: value}
+			nodes = append(nodes, &node)
+			nodesMap[value["id"]] = &node
+		default:
+			sendStatus(w, fmt.Sprintf("Nodes are not correct format"), http.StatusBadRequest)
+			return
+		}
+	}
+
+	var edges []*rg.Edge
+
+	for _, edgeData := range bodyJsonMap["edges"] {
+		switch value := edgeData.(type) {
+		case map[string]interface{}:
+			_, ok := value["source"]
+			if !ok {
+				sendStatus(w, fmt.Sprintf("Create edge failed, missing source"), http.StatusBadRequest)
+				return
+			}
+
+			_, ok = value["target"]
+			if !ok {
+				sendStatus(w, fmt.Sprintf("Create edge failed, missing target"), http.StatusBadRequest)
+				return
+			}
+
+			properties := make(map[string]interface{})
+			for k, v := range value {
+				if k != "target" && k != "source" {
+					_, err := validateDataType(v, h.AllConfig.EdgeFields[graphName][k])
+					if err != nil {
+						sendStatus(w, fmt.Sprintf("Create edge failed, %s is not of the corect data type %s",
+							k, h.AllConfig.EdgeFields[graphName][k]), http.StatusBadRequest)
+						return
+					}
+					properties[k] = fmt.Sprint(v)
+				}
+			}
+
+			source := nodesMap[value["source"]]
+			target := nodesMap[value["target"]]
+			edge := rg.Edge{Source: source, Destination: target, Relation: "Edge", Properties: properties}
+			edges = append(edges, &edge)
+		default:
+			sendStatus(w, fmt.Sprintf("Edge are not correct format"), http.StatusBadRequest)
+			return
+		}
+	}
+
+	conn := h.AllConfig.RedisPool.Get()
+	defer conn.Close()
+
+	graph := rg.GraphNew(graphName, conn)
+	err = graph.Delete()
+	if err != nil {
+		log.WithFields(log.Fields{
+			"object":    "graph",
+			"graph":     graphName,
+			"requestid": r.Context().Value("requestid"),
+			"error":     err,
+		}).Info("Delete graph - not exists")
+	}
+
+	for _, node := range nodes {
+		graph.AddNode(node)
+	}
+
+	for _, edge := range edges {
+		err := graph.AddEdge(edge)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "graph",
+				"graph":     graphName,
+				"requestid": r.Context().Value("requestid"),
+				"error":     err,
+			}).Error("Add edge failed")
+			sendStatus(w, fmt.Sprintf("Add edge failed %s - %v", graphName, err), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
+	graph.Commit()
+
+	/*
+		According to the Commit method error should be returned but not
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "graph",
+				"graph":     graphName,
+				"requestid": r.Context().Value("requestid"),
+				"error":     err,
+			}).Error("Commit nodes and edges failed")
+			sendStatus(w, fmt.Sprintf("Commit nodes and edges failed %s - %v", graphName, err), http.StatusServiceUnavailable)
+			return
+		}
+	*/
+
+	log.WithFields(log.Fields{
+		"object":    "graph",
+		"graph":     graphName,
+		"requestid": r.Context().Value("requestid"),
+		"error":     err,
+	}).Info("Crated graph")
+
+	sendStatus(w, fmt.Sprintf("Create graph %s", graphName), http.StatusCreated)
+	return
 }
 
 func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +509,7 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 			"error":     err,
 		}).Error("Get edges")
 
-		sendStatus(w, fmt.Sprintf("Get edge data failed ", err), http.StatusInternalServerError)
+		sendStatus(w, fmt.Sprintf("Get edge data failed %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -516,7 +678,18 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodGet {
 		id := params["id"]
 		query := fmt.Sprintf("MATCH (n:Node {id: '%s'}) RETURN n", id)
-		result, _ := graph.Query(query)
+		result, err := graph.Query(query)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "node",
+				"requestid": r.Context().Value("requestid"),
+				"id":        id,
+				"error":     err,
+			}).Error("Check if node exists")
+
+			sendStatus(w, fmt.Sprintf("Check if node exist failed for %s", id), http.StatusInternalServerError)
+			return
+		}
 
 		if result.Empty() {
 			sendStatus(w, fmt.Sprintf("Node id %s does not exists", id), http.StatusNotFound)
@@ -742,7 +915,19 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 		query := fmt.Sprintf("MATCH (n:Node)-[r:Edge]->(m:Node) WHERE n.id = '%s' and m.id = '%s' RETURN r",
 			sourceId, targetId)
-		result, _ := graph.Query(query)
+		result, err := graph.Query(query)
+
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "edge",
+				"requestid": r.Context().Value("requestid"),
+				"error":     err,
+			}).Error("Check if edge exists")
+
+			sendStatus(w, fmt.Sprintf("Check if edge exist failed"), http.StatusInternalServerError)
+			return
+		}
+
 		//result.PrettyPrint()
 		if result.Empty() {
 			sendStatus(w, fmt.Sprintf("Edge between source id %s and target id %s does not exists", sourceId, targetId), http.StatusNotFound)
@@ -977,11 +1162,11 @@ func logcall(next http.Handler) http.Handler {
 
 }
 
-type PromethusInit struct {
+type PrometheusInit struct {
 	responseTime *prometheus.HistogramVec
 }
 
-func (h PromethusInit) promMonitor(next http.Handler) http.Handler {
+func (h PrometheusInit) promMonitor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		start := time.Now()
