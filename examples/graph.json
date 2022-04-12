@@ -1,0 +1,98 @@
+{
+  "nodes": [
+    {
+      "id": "lb-1",
+      "title": "lb",
+      "subTitle": "instance:#01",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "id": "cust-svc-1",
+      "title": "cust-svc-1",
+      "subTitle": "instance:#01",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "id": "cust-svc-2",
+      "title": "cust-svc-2",
+      "subTitle": "instance:#02",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "id": "pay-svc-1",
+      "title": "pay-svc-1",
+      "subTitle": "instance:#01",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "id": "book-svc-1",
+      "title": "book-svc-1",
+      "subTitle": "instance:#01",
+      "detail__role": "load",
+      "arc__failed": 0,
+      "arc__passed": 1,
+      "mainStat": 0,
+      "secondaryStat": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "lb-1",
+      "target": "cust-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "lb-1",
+      "target": "cust-svc-2",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "cust-svc-1",
+      "target": "pay-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "cust-svc-1",
+      "target": "book-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "cust-svc-2",
+      "target": "pay-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "cust-svc-2",
+      "target": "book-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    },
+    {
+      "source": "pay-svc-1",
+      "target": "book-svc-1",
+      "mainStat": 0,
+      "secondaryStat": 0
+    }
+  ]
+}
