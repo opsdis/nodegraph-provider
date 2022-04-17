@@ -244,10 +244,12 @@ func setupRoutes(handler *HandlerInit, promHandler *PrometheusInit) {
 	rtr.HandleFunc("/api/edges/{graph:.+}/{source_id:.+}/{target_id:.+}", handler.edges).Methods("GET")
 
 	// Graph
+	rtr.HandleFunc("/api/graphs/{graph:.+}", handler.createGraph).Methods("POST")
+	rtr.HandleFunc("/api/graphs/{graph:.+}", handler.deleteGraph).Methods("DELETE")
+
+	// The following is deprecated
 	rtr.HandleFunc("/api/graph/{graph:.+}", handler.createGraph).Methods("POST")
 	rtr.HandleFunc("/api/graph/{graph:.+}", handler.deleteGraph).Methods("DELETE")
-
-	// Controller
 	rtr.HandleFunc("/api/controller/{graph:.+}/delete-all", handler.deleteGraph).Methods("POST")
 
 	rtr.Use(logcall)

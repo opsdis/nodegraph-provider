@@ -132,8 +132,14 @@ The api endpoints will operate on a complete graph. The POST will first
 delete before create. For a client that have the full "picture" of the graph
 model, this is the most effective endpoint to use.
 
-    POST /api/graph/{graph_schema}
-    DELETE /api/graph/{graph_schema}
+    POST /api/graphs/{graph_schema}
+    DELETE /api/graphs/{graph_schema}
+
+> The graph endpoints in singulars are deprecated:
+> 
+>  POST /api/graphs/{graph_schema}
+> 
+>  DELETE /api/graphs/{graph_schema}
 
 The POST endpoint requiere a body of a list of nodes and edges, e.g.
 ```json
