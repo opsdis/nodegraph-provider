@@ -436,8 +436,7 @@ func (h HandlerInit) createGraph(w http.ResponseWriter, r *http.Request) {
 		"object":    "graph",
 		"graph":     graphName,
 		"requestid": r.Context().Value("requestid"),
-		"error":     err,
-	}).Info("Crated graph")
+	}).Info("Created graph")
 
 	sendStatus(w, fmt.Sprintf("Create graph %s", graphName), http.StatusCreated)
 	return
