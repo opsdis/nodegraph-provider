@@ -488,7 +488,49 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
 	// Get the name of the graph model
 	name := params["graph"]
+	// Queries enable to search in a narrow space of the graph
+	// queries can be done on title and/or subtitle
+	//source_title=XYZ
+	//target_title=XYZ
+	//target_subtitle=XYZ
+	//target_subtitle=XYZ
 
+	log.Info(r.URL.Query())
+	whereClause := ""
+	//whereClauseFinal := ""
+	//and := ""
+	//or := ""
+	/*
+		source_title, ok := r.URL.Query()["source_title"]
+		if ok && len(source_title) == 1 {
+			whereClause = whereClause + and + fmt.Sprintf(" n.title = '%s'", source_title[0])
+			//whereClauseFinal = whereClauseFinal + or + fmt.Sprintf(" n.title = '%s'", source_title[0])
+			and = " AND"
+			//or = " OR"
+		}
+
+		target_title, ok := r.URL.Query()["target_title"]
+		if ok && len(target_title) == 1 {
+			whereClause = whereClause + and + fmt.Sprintf(" m.title = '%s'", target_title[0])
+			//whereClauseFinal = whereClauseFinal + or + fmt.Sprintf(" n.title = '%s'", target_title[0])
+			and = " AND"
+			//or = " OR"
+		}
+	*/
+
+	whereQuery, ok := r.URL.Query()["query"]
+	if ok && len(whereQuery) == 1 {
+		whereClause = fmt.Sprintf("WHERE %s", whereQuery[0])
+		//whereClauseFinal = whereClauseFinal + or + fmt.Sprintf(" n.title = '%s'", target_title[0])
+		//and = " AND"
+		//or = " OR"
+	}
+	/*
+		if len(whereClause) != 0 {
+			whereClause = "WHERE " + whereClause
+			//whereClauseFinal = "WHERE " + whereClauseFinal
+		}
+	*/
 	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
 
@@ -500,7 +542,11 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	graph := rg.GraphNew(name, conn)
-	query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
+
+	// Get edges
+	//query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
+	//query := fmt.Sprintf("Match (n:Node)-[r:Edge]->(m:Node) %s Return n.id,r,m.id", whereClause)
+	query := fmt.Sprintf("Match (n:Node)-[r:Edge]->(m:Node) %s Return n,r,m", whereClause)
 	result, err := graph.Query(query)
 	//result.PrettyPrint()
 	if err != nil {
@@ -514,60 +560,87 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result.PrettyPrint()
 	var edges []interface{}
+	nodes_map := make(map[interface{}]interface{})
+
 	for result.Next() { // Next returns true until the iterator is depleted.
 		edge := make(map[string]interface{})
-		r := result.Record()
+		res := result.Record()
 
-		source := r.GetByIndex(0)
-		edge["source"] = source
+		source := res.GetByIndex(0).(*rg.Node)
+		if _, ok := nodes_map[source.GetProperty("id")]; !ok {
+			node := make(map[string]interface{})
+			for key, value := range source.Properties {
+				// Add check that correct to field
+				node[key] = value
+			}
+			nodes_map[source.GetProperty("id")] = node
+		}
 
-		edgeData := r.GetByIndex(1).(*rg.Edge)
+		edge["source"] = source.GetProperty("id")
+
+		edgeData := res.GetByIndex(1).(*rg.Edge)
 		for key, value := range edgeData.Properties {
 			edge[key] = value
 		}
 
-		target := r.GetByIndex(2)
-		edge["target"] = target
+		target := res.GetByIndex(2).(*rg.Node)
+		if _, ok := nodes_map[target.GetProperty("id")]; !ok {
+			node := make(map[string]interface{})
+			for key, value := range target.Properties {
+				// Add check that correct to field
+				node[key] = value
+			}
+			nodes_map[target.GetProperty("id")] = node
+		}
 
-		edge["id"] = fmt.Sprintf("%s:%s", source, target)
+		edge["target"] = target.GetProperty("id")
+
+		edge["id"] = fmt.Sprintf("%s:%s", source.GetProperty("id"), target.GetProperty("id"))
 
 		edges = append(edges, edge)
 	}
-
-	// Get nodes
-	query = "Match (n:Node) Return n"
-
-	result, err = graph.Query(query)
-	//result.PrettyPrint()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"object":    "nodes",
-			"requestid": r.Context().Value("requestid"),
-			"error":     err,
-		}).Error("Get nodes")
-
-		sendStatus(w, fmt.Sprintf("Get node data failed"), http.StatusInternalServerError)
-		return
-	}
-
+	// Process the nodes
 	var nodes []interface{}
-	for result.Next() {
-		node := make(map[string]interface{})
-		r := result.Record()
-		nodeData := r.GetByIndex(0).(*rg.Node)
+	for _, value := range nodes_map {
+		nodes = append(nodes, value)
+	}
+	/*
+		// Get nodes
+		//query = "Match (n:Node) Return n"
+		query = fmt.Sprintf("Match (n:Node) %s Return n", whereClauseFinal)
+		result, err = graph.Query(query)
+		//result.PrettyPrint()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"object":    "nodes",
+				"requestid": r.Context().Value("requestid"),
+				"error":     err,
+			}).Error("Get nodes")
 
-		for key, value := range nodeData.Properties {
-			// Add check that correct to field
-
-			node[key] = value
+			sendStatus(w, fmt.Sprintf("Get node data failed"), http.StatusInternalServerError)
+			return
 		}
 
-		nodes = append(nodes, node)
-	}
+		var nodes1 []interface{}
+		for result.Next() {
+			node1 := make(map[string]interface{})
+			res := result.Record()
+			nodeData := res.GetByIndex(0).(*rg.Node)
 
+			for key, value := range nodeData.Properties {
+				// Add check that correct to field
+
+				node1[key] = value
+			}
+
+			nodes1 = append(nodes1, node1)
+		}
+	*/
 	response := make(map[string]interface{})
 	response["edges"] = edges
+
 	response["nodes"] = nodes
 
 	bodyText, _ := json.Marshal(response)
