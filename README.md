@@ -84,7 +84,23 @@ All endpoint expects the header "Content-Type" set to "application/json"
 
 ## Data source API
    
-    GET /{graph_schema}/api/graph/data
+    GET /{graph_schema}/api/graph/data?query=<WHERE clause>
+The above query parameter is optional, If empty or not set all nodes and edges are returned.
+If set, it must be a valid Cypher statement, https://neo4j.com/docs/cypher-manual/current/clauses/where/,
+but with some limitation documented in https://neo4j.com/docs/cypher-manual/current/clauses/where/.
+For example the Redis Cypher do not support regular expression.
+
+> The `WHERE` should not be part of the query string, and the string must be urlencoded.
+
+The WHERE clause can only operate where source nodes, edges and target nodes are returned, e.g.
+the statement `edge.mainStat > 0` will be in encoded url:
+
+    query=edge.mainStat%20%3E%200
+
+The source nodes are referred to as `source`, target nodes are referred to as `target` and edges are 
+referred to as `edge`
+
+
 	GET /{graph_schema}/api/graph/fields
 	GET /{graph_schema}/api/health
 
@@ -141,7 +157,7 @@ model, this is the most effective endpoint to use.
 > 
 >  DELETE /api/graphs/{graph_schema}
 
-The POST endpoint requiere a body of a list of nodes and edges, e.g.
+The POST endpoint require a body of a list of nodes and edges, e.g.
 ```json
 {
   "nodes": [
@@ -179,9 +195,6 @@ The following api are deprecated:
     POST /api/controller/{graph_schema}/delete-all
 
 
-
-
-
 ## Return status
 
 - 200
@@ -209,7 +222,7 @@ Start redis with module RedisGraph. Simple way just use docker.
 
     docker run -p 6379:6379 redislabs/redismod
     
-Start nodegraph-provider
+Start nodegraph-provider, configuration file is default `config.yml`
 
     go build -o build/nodegraph-provider  *.go
     ./build/nodegraph-provider
@@ -232,7 +245,8 @@ Or run the example to create a complete graph:
 
     ./examples/setup_graph.sh
 
-In Grafana you should now see this.
+In Grafana you should now see this graph.
+
 ![Initial Graph](docs/graph_1.png?raw=true "Start graph")
 
 Add a new node with id `cust-svc-2`
@@ -252,7 +266,13 @@ Update metrics on edge between `lb-1` to `cust-svc-1
     curl -s -i  -H "Content-Type: application/json" -X PUT "localhost:9393/api/edges/micro/lb-1/cust-svc-1?mainStat=$RANDOM&secondaryStat=$RANDOM"
 
 You should now see something like this.
+
 ![Updated Graph](docs/graph_2.png?raw=true "Updated graph")
+
+Delete the whole graph
+
+    curl -s -i  -H "Content-Type: application/json" -X DELETE "localhost:9393/api/graph/micro"
+
 
 # Build docker 
 Use the Dockerfile in the root directory of the project
