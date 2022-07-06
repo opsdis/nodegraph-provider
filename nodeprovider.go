@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"github.com/golang/gddo/httputil/header"
@@ -43,7 +42,6 @@ type loggingResponseWriter struct {
 	length     int
 }
 
-// Implement interface WriteHeader
 func (lrw *loggingResponseWriter) WriteHeader(code int) {
 	lrw.statusCode = code
 	lrw.ResponseWriter.WriteHeader(code)
@@ -92,8 +90,6 @@ func main() {
 	viper.AddConfigPath("$HOME/.nodegraph-provider")
 	viper.AddConfigPath("/usr/local/etc/nodegraph-provider")
 	viper.AddConfigPath("/etc/nodegraph-provider")
-
-	//viper.SetTypeByDefaultValue(true)
 
 	if *usage {
 		flag.Usage()
@@ -232,7 +228,6 @@ func setupRoutes(handler *HandlerInit, promHandler *PrometheusInit) {
 	// Routes to the create and update of nodes and edges
 	// Node
 	rtr.HandleFunc("/api/nodes/{graph:.+}", handler.nodes).Methods("POST")
-	//rtr.HandleFunc("/api/nodes/{graph:.+}", handler.nodes).Methods("GET")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("PUT")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("DELETE")
 	rtr.HandleFunc("/api/nodes/{graph:.+}/{id:.+}", handler.nodes).Methods("GET")
@@ -246,11 +241,6 @@ func setupRoutes(handler *HandlerInit, promHandler *PrometheusInit) {
 	// Graph
 	rtr.HandleFunc("/api/graphs/{graph:.+}", handler.createGraph).Methods("POST")
 	rtr.HandleFunc("/api/graphs/{graph:.+}", handler.deleteGraph).Methods("DELETE")
-
-	// The following is deprecated
-	rtr.HandleFunc("/api/graph/{graph:.+}", handler.createGraph).Methods("POST")
-	rtr.HandleFunc("/api/graph/{graph:.+}", handler.deleteGraph).Methods("DELETE")
-	rtr.HandleFunc("/api/controller/{graph:.+}/delete-all", handler.deleteGraph).Methods("POST")
 
 	rtr.Use(logcall)
 	rtr.Use(promHandler.promMonitor)
@@ -327,14 +317,6 @@ func (h HandlerInit) createGraph(w http.ResponseWriter, r *http.Request) {
 	for _, nodeData := range bodyJsonMap["nodes"] {
 		switch value := nodeData.(type) {
 		case map[string]interface{}:
-			for k, v := range value {
-				_, err := validateDataType(v, h.AllConfig.NodeFields[graphName][k])
-				if err != nil {
-					sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
-						k, h.AllConfig.NodeFields[graphName][k]), http.StatusBadRequest)
-					return
-				}
-			}
 			node := rg.Node{Label: "Node", Properties: value}
 			nodes = append(nodes, &node)
 			nodesMap[value["id"]] = &node
@@ -364,13 +346,7 @@ func (h HandlerInit) createGraph(w http.ResponseWriter, r *http.Request) {
 			properties := make(map[string]interface{})
 			for k, v := range value {
 				if k != "target" && k != "source" {
-					_, err := validateDataType(v, h.AllConfig.EdgeFields[graphName][k])
-					if err != nil {
-						sendStatus(w, fmt.Sprintf("Create edge failed, %s is not of the corect data type %s",
-							k, h.AllConfig.EdgeFields[graphName][k]), http.StatusBadRequest)
-						return
-					}
-					properties[k] = fmt.Sprint(v)
+					properties[k] = v
 				}
 			}
 
@@ -442,6 +418,9 @@ func (h HandlerInit) createGraph(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// getFields returns the fields name and data type for nodes and edges.
+// The returned data is in the format according to the nodegraph-api datasource
+// https://github.com/hoptical/nodegraph-api-plugin#fetch-graph-fields
 func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 
@@ -482,12 +461,28 @@ func (h HandlerInit) getFields(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// getData return the nodes and edges based on the WHERE clause in the query parameter.
+// The returned data is in the format according to the nodegraph-api datasource
+// https://github.com/hoptical/nodegraph-api-plugin#fetch-graph-data
+
+// The query parameter must be a valid chyper WHERE clause expression, e.g.
+// query=source.title+%3D+%27bookinfo%2Fproductpage%27+and+rel.mainStat+%3E+1
+// The query expression should not include WHERE and must be url encoded.
+// If the query parameter is not set all nodes and edges in the graph is returned.
+// Source nodes must be named source, target nodes must be named target and edges must
+// be named edge.
 func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 
 	params := mux.Vars(r)
 	// Get the name of the graph model
 	name := params["graph"]
+
+	whereClause := ""
+	whereQuery, ok := r.URL.Query()["query"]
+	if ok && len(whereQuery) == 1 && len(whereQuery[0]) > 0 {
+		whereClause = fmt.Sprintf("WHERE %s", whereQuery[0])
+	}
 
 	conn := h.AllConfig.RedisPool.Get()
 	defer conn.Close()
@@ -500,7 +495,9 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	graph := rg.GraphNew(name, conn)
-	query := "Match (n:Node)-[r:Edge]->(m:Node) Return n.id,r,m.id"
+
+	// Get edges
+	query := fmt.Sprintf("Match (source:Node)-[edge:Edge]->(target:Node) %s Return source,edge,target", whereClause)
 	result, err := graph.Query(query)
 	//result.PrettyPrint()
 	if err != nil {
@@ -514,60 +511,59 @@ func (h HandlerInit) getData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//result.PrettyPrint()
 	var edges []interface{}
+	nodesMap := make(map[interface{}]interface{})
+
 	for result.Next() { // Next returns true until the iterator is depleted.
 		edge := make(map[string]interface{})
-		r := result.Record()
+		res := result.Record()
 
-		source := r.GetByIndex(0)
-		edge["source"] = source
+		// Get source node
+		source := res.GetByIndex(0).(*rg.Node)
+		if _, ok := nodesMap[source.GetProperty("id")]; !ok {
+			node := make(map[string]interface{})
+			for key, value := range source.Properties {
+				// Add check that correct to field
+				node[key] = value
+			}
+			nodesMap[source.GetProperty("id")] = node
+		}
 
-		edgeData := r.GetByIndex(1).(*rg.Edge)
+		// Get target
+		target := res.GetByIndex(2).(*rg.Node)
+		if _, ok := nodesMap[target.GetProperty("id")]; !ok {
+			node := make(map[string]interface{})
+			for key, value := range target.Properties {
+				// Add check that correct to field
+				node[key] = value
+			}
+			nodesMap[target.GetProperty("id")] = node
+		}
+
+		// Get edge
+
+		edgeData := res.GetByIndex(1).(*rg.Edge)
 		for key, value := range edgeData.Properties {
 			edge[key] = value
 		}
+		edge["source"] = source.GetProperty("id")
+		edge["target"] = target.GetProperty("id")
 
-		target := r.GetByIndex(2)
-		edge["target"] = target
-
-		edge["id"] = fmt.Sprintf("%s:%s", source, target)
+		edge["id"] = fmt.Sprintf("%s:%s", source.GetProperty("id"), target.GetProperty("id"))
 
 		edges = append(edges, edge)
 	}
 
-	// Get nodes
-	query = "Match (n:Node) Return n"
-
-	result, err = graph.Query(query)
-	//result.PrettyPrint()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"object":    "nodes",
-			"requestid": r.Context().Value("requestid"),
-			"error":     err,
-		}).Error("Get nodes")
-
-		sendStatus(w, fmt.Sprintf("Get node data failed"), http.StatusInternalServerError)
-		return
-	}
-
+	// Process the find nodes
 	var nodes []interface{}
-	for result.Next() {
-		node := make(map[string]interface{})
-		r := result.Record()
-		nodeData := r.GetByIndex(0).(*rg.Node)
-
-		for key, value := range nodeData.Properties {
-			// Add check that correct to field
-
-			node[key] = value
-		}
-
-		nodes = append(nodes, node)
+	for _, value := range nodesMap {
+		nodes = append(nodes, value)
 	}
 
 	response := make(map[string]interface{})
 	response["edges"] = edges
+
 	response["nodes"] = nodes
 
 	bodyText, _ := json.Marshal(response)
@@ -629,14 +625,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if result.Empty() {
-			for k, v := range properties {
-				_, err := validateDataType(v, h.AllConfig.NodeFields[name][k])
-				if err != nil {
-					sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
-						k, h.AllConfig.NodeFields[name][k]), http.StatusBadRequest)
-					return
-				}
-			}
+
 			node := rg.Node{Label: "Node", Properties: properties}
 
 			graph.AddNode(&node)
@@ -742,13 +731,7 @@ func (h HandlerInit) nodes(w http.ResponseWriter, r *http.Request) {
 
 		nodeProperties := make([]string, 0, len(values))
 		for k, v := range values {
-			value, err := validateDataType(v[0], h.AllConfig.NodeFields[name][k])
-			if err != nil {
-				sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
-					k, h.AllConfig.NodeFields[name][k]), http.StatusBadRequest)
-				return
-			}
-			nodeProperties = append(nodeProperties, fmt.Sprintf("n.%s = %v", k, value))
+			nodeProperties = append(nodeProperties, fmt.Sprintf("n.%s = %v", k, v[0]))
 		}
 
 		properties := fmt.Sprintf("%s", strings.Join(nodeProperties, ","))
@@ -853,13 +836,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 			for k, v := range bodyJsonMap {
 				if k != "source" && k != "target" {
 					// Exclude source_id and target_id
-					value, err := validateDataType(v, h.AllConfig.EdgeFields[name][k])
-					if err != nil {
-						sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
-							k, h.AllConfig.EdgeFields[name][k]), http.StatusBadRequest)
-						return
-					}
-					edgeProperties = append(edgeProperties, fmt.Sprintf("%s:%v", k, value))
+					edgeProperties = append(edgeProperties, fmt.Sprintf("%s:%v", k, v))
 				}
 			}
 			properties := fmt.Sprintf("{%s}", strings.Join(edgeProperties, ","))
@@ -982,13 +959,7 @@ func (h HandlerInit) edges(w http.ResponseWriter, r *http.Request) {
 
 		edgeProperties := make([]string, 0, len(values))
 		for k, v := range values {
-			value, err := validateDataType(v[0], h.AllConfig.EdgeFields[name][k])
-			if err != nil {
-				sendStatus(w, fmt.Sprintf("Create node failed, %s is not of the corect data type %s",
-					k, h.AllConfig.EdgeFields[name][k]), http.StatusBadRequest)
-				return
-			}
-			edgeProperties = append(edgeProperties, fmt.Sprintf("r.%s = %v", k, value))
+			edgeProperties = append(edgeProperties, fmt.Sprintf("r.%s = %v", k, v[0]))
 		}
 
 		properties := fmt.Sprintf("%s", strings.Join(edgeProperties, ","))
@@ -1097,42 +1068,6 @@ func (h HandlerInit) validateHeader(w http.ResponseWriter, r *http.Request) bool
 		}
 	}
 	return false
-}
-
-func validateDataType(i interface{}, fieldType string) (string, error) {
-	if i == nil {
-		return "", errors.New("data type error")
-	}
-
-	switch fieldType {
-	case "string":
-		s := i.(string)
-		return strconv.Quote(s), nil
-	case "number":
-		switch i.(type) {
-		case string:
-			// Check if int
-			_, err := strconv.Atoi(i.(string))
-			if err != nil {
-				// Check if float
-				_, err := strconv.ParseFloat(i.(string), 64)
-				if err != nil {
-					return "", err
-				}
-				return i.(string), nil
-			}
-			return i.(string), nil
-		case int:
-			return strconv.Itoa(i.(int)), nil
-		case float64:
-			return strconv.FormatFloat(i.(float64), 'f', -1, 64), nil
-
-		default:
-			return "", errors.New("data type error")
-		}
-	default:
-		return "", errors.New("data type error")
-	}
 }
 
 func nextRequestID() ksuid.KSUID {
