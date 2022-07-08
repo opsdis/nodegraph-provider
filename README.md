@@ -189,6 +189,11 @@ The POST endpoint require a body of a list of nodes and edges, e.g.
 Please see the `examples/graph.json` and `examples/setup_graph.sh` for a
 complete example.
 
+## Internal metrics
+
+Internal metrics are exposed on endpoint `/metrics`. Go metrics and nodegraph-provider specific metrics are exposed 
+on the endpoint in Prometheus format.
+
 ## Deprecated API	
 The following api are deprecated: 
 
